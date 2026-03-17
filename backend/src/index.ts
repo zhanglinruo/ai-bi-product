@@ -10,8 +10,22 @@ import aiEngineRoutes from './modules/ai-engine/routes';
 import queryRoutes from './modules/query/routes';
 import systemRoutes from './modules/system/routes';
 import progressRoutes from './modules/progress/routes';
+import agentRoutes, { initOrchestrator } from './modules/agent/routes';
 
+// 初始化工具
 initializeTools();
+
+// 初始化 Agent Orchestrator
+initOrchestrator({
+  llmClient: {
+    baseUrl: process.env.LLM_BASE_URL || 'https://qianfan.baidubce.com/v2/coding',
+    apiKey: process.env.LLM_API_KEY || '',
+    model: process.env.LLM_MODEL || 'qianfan-code-latest',
+    temperature: parseFloat(process.env.LLM_TEMPERATURE || '0.3'),
+  },
+  dbPool: null, // 将在数据库连接后设置
+  semanticConfig: require('./config/semantic-layer').semanticConfig,
+});
 
 const app: Application = express();
 
@@ -31,6 +45,7 @@ app.use('/api/ai', aiEngineRoutes);
 app.use('/api/query', queryRoutes);
 app.use('/api/system', systemRoutes);
 app.use('/api/progress', progressRoutes);
+app.use('/api/agent', agentRoutes);
 
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   console.error('Error:', err.message);

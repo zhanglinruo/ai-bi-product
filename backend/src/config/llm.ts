@@ -7,13 +7,15 @@ interface LLMConfig {
   apiKey: string;
   model: string;
   temperature: number;
+  maxTokens?: number;
 }
 
 export const llmConfig: LLMConfig = {
-  baseUrl: process.env.LLM_BASE_URL || '',
+  baseUrl: process.env.LLM_BASE_URL || 'https://qianfan.baidubce.com/v2/coding',
   apiKey: process.env.LLM_API_KEY || '',
-  model: process.env.LLM_MODEL || '',
-  temperature: parseFloat(process.env.LLM_TEMPERATURE || '0.5')
+  model: process.env.LLM_MODEL || 'qianfan-code-latest',
+  temperature: parseFloat(process.env.LLM_TEMPERATURE || '0.3'),
+  maxTokens: parseInt(process.env.LLM_MAX_TOKENS || '2000'),
 };
 
 export interface Message {
@@ -21,63 +23,73 @@ export interface Message {
   content: string;
 }
 
-export async function callLLM(messages: Message[]): Promise<string> {
-  const response = await fetch(`${llmConfig.baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${llmConfig.apiKey}`
-    },
-    body: JSON.stringify({
-      model: llmConfig.model,
-      messages,
-      temperature: llmConfig.temperature
-    })
-  });
+/**
+ * 千帆 LLM 客户端
+ * 支持 OpenAI 兼容格式的 API
+ */
+export class QianfanLLMClient {
+  private baseUrl: string;
+  private apiKey: string;
+  private model: string;
+  private temperature: number;
+  private maxTokens: number;
 
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`LLM调用失败: ${response.status} - ${error}`);
+  constructor(config?: Partial<LLMConfig>) {
+    this.baseUrl = config?.baseUrl || llmConfig.baseUrl;
+    this.apiKey = config?.apiKey || llmConfig.apiKey;
+    this.model = config?.model || llmConfig.model;
+    this.temperature = config?.temperature || llmConfig.temperature;
+    this.maxTokens = config?.maxTokens || llmConfig.maxTokens || 2000;
   }
 
-  const data = await response.json() as any;
-  return data.choices?.[0]?.message?.content || '';
+  /**
+   * 调用 Chat API
+   */
+  async chat(params: {
+    messages: Message[];
+    model?: string;
+    temperature?: number;
+    maxTokens?: number;
+  }): Promise<{ content: string; usage?: { inputTokens?: number; outputTokens?: number } }> {
+    const url = `${this.baseUrl}/chat/completions`;
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: params.model || this.model,
+        messages: params.messages,
+        temperature: params.temperature ?? this.temperature,
+        max_tokens: params.maxTokens ?? this.maxTokens,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`LLM调用失败: ${response.status} - ${error}`);
+    }
+
+    const data = await response.json() as any;
+    return {
+      content: data.choices?.[0]?.message?.content || '',
+      usage: {
+        inputTokens: data.usage?.prompt_tokens,
+        outputTokens: data.usage?.completion_tokens,
+      },
+    };
+  }
 }
 
-export function buildSchemaPrompt(): string {
-  return `
-表名: t_ai_medical_product_records
-说明: 医疗产品采购记录表
+// 默认客户端实例
+export const llmClient = new QianfanLLMClient();
 
-字段说明:
-- id: 主键
-- hospital_code: 医院编码
-- product_spec_code: 产品规格编码
-- province: 省份
-- city: 城市
-- county: 县/区
-- hospital_name: 医院名称
-- hospital_level: 医院等级 (三级/二级/一级)
-- record_date: 记录日期
-- price: 单价
-- quantity: 数量
-- amount: 金额
-- generic_name: 通用名
-- product_name: 产品名称
-- brand_name: 品牌名称
-- manufacturer: 生产厂家
-- dosage_form: 剂型
-- specifications: 规格
-- packaging: 包装
-- packaging_material: 包装材料
-- conversion_ratio: 转换比
-- min_package_unit: 最小包装单位
-- approval_number: 批准文号
-- corporate_group: 企业集团
-- is_delete: 是否删除
-- created_by: 创建人
-- created_time: 创建时间
-- updated_by: 更新人
-- updated_time: 更新时间
-`;
+/**
+ * 调用 LLM（兼容旧接口）
+ */
+export async function callLLM(messages: Message[]): Promise<string> {
+  const result = await llmClient.chat({ messages });
+  return result.content;
 }
