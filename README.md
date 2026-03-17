@@ -217,11 +217,11 @@ NODE_ENV=development
 PORT=3000
 
 # 数据库配置
-DB_HOST=10.250.2.29
-DB_PORT=3100
-DB_USER=hdc
-DB_PASSWORD=你的密码
-DB_NAME=swyl_test
+DB_HOST=
+DB_PORT=
+DB_USER=
+DB_PASSWORD=
+DB_NAME=
 
 # JWT 配置
 JWT_SECRET=your-jwt-secret-key
