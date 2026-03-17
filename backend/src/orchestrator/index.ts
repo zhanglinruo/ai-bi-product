@@ -19,7 +19,7 @@ import {
   InsightOutput,
   VisualizationOutput,
 } from '../agents/types';
-import { BaseAgent } from '../agents/base';
+import { BaseAgent, LLMClient } from '../agents/base';
 import { NLUBAgent } from '../agents/understanding/nlu-agent';
 import { SemanticAgent } from '../agents/understanding/semantic-agent';
 import { ClarificationAgent } from '../agents/understanding/clarification-agent';
@@ -112,7 +112,7 @@ export class AgentOrchestrator {
       
       // 1.1 NLU Agent
       if (this.config.debug) console.log('[Orchestrator] 执行 NLU Agent...');
-      const nluResult = await this.executeAgent<NLUOutput>('nlu-agent', query, context);
+      const nluResult = await this.executeAgent<NLUOutput>('nlu-agent', { query, context }, context);
       
       if (!nluResult.success) {
         errors.push(nluResult.error!);
@@ -148,7 +148,6 @@ export class AgentOrchestrator {
         if (clarificationResult.success && clarificationResult.data!.needsClarification) {
           result.needsClarification = true;
           result.clarificationQuestions = clarificationResult.data!.questions;
-          // 可以选择返回澄清问题，或者继续执行
         }
       }
       
@@ -160,9 +159,8 @@ export class AgentOrchestrator {
       if (this.config.debug) console.log('[Orchestrator] 执行 SQL Generator Agent...');
       const sqlResult = await this.executeAgent<SQLGeneratorOutput>('sql-generator-agent', {
         intent: nluResult.data!.intent,
+        entities: nluResult.data!.entities,
         mappedFields: semanticResult.data?.mappedFields || [],
-        schema: {}, // TODO: 从 context 获取 schema
-        joinHints: semanticResult.data?.joinHints,
       }, context);
       
       if (!sqlResult.success) {
@@ -291,7 +289,7 @@ export class AgentOrchestrator {
       workflowId: `wf_${Date.now()}`,
       query,
       nodes: [
-        { agentName: 'nlu-agent', input: query, status: 'pending' },
+        { agentName: 'nlu-agent', input: { query }, status: 'pending' },
         { agentName: 'semantic-agent', input: {}, status: 'pending' },
         { agentName: 'sql-generator-agent', input: {}, status: 'pending' },
         { agentName: 'validator-agent', input: {}, status: 'pending' },
@@ -361,7 +359,7 @@ export class AgentOrchestrator {
  * 创建 Orchestrator 工厂函数
  */
 export function createOrchestrator(
-  llmClient: any,
+  llmClient: LLMClient,
   dbPool: any,
   semanticConfig: any,
   config?: OrchestratorConfig

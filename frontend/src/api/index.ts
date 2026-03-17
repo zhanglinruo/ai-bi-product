@@ -55,6 +55,15 @@ export const aiApi = {
   generateConclusion: (question: string, result: any, sql: string) => api.post('/ai/generate-conclusion', { question, result, sql })
 };
 
+export const agentApi = {
+  // Agent 架构查询
+  query: (query: string, datasourceId?: string) => api.post('/agent/query', { query, datasourceId }),
+  // 分步执行（调试）
+  querySteps: (query: string, datasourceId?: string) => api.post('/agent/query/steps', { query, datasourceId }),
+  // Agent 列表
+  getAgents: () => api.get('/agent/list'),
+};
+
 export const systemApi = {
   getConfig: () => api.get('/system/config'),
   updateConfig: (config_key: string, config_value: string) => api.put('/system/config', { config_key, config_value }),

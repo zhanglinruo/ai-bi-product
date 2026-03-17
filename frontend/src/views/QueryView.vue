@@ -53,28 +53,40 @@
           </div>
         </div>
       </template>
-      <div v-if="result.type === 'analysis'" class="analysis-result">
-        <el-alert v-if="result.template" :title="'分析模板: ' + result.template" type="info" :closable="false" style="margin-bottom: 15px" />
-        <div v-for="(step, idx) in result.steps" :key="idx" class="step-result">
-          <div class="step-title">{{ idx + 1 }}. {{ step.step }}</div>
-          <div class="step-desc">{{ step.description }}</div>
-          <div v-if="step.summary" class="step-summary">{{ step.summary }}</div>
-          <el-table :data="step.data" style="width: 100%; margin-top: 10px" v-if="step.data && step.data.length > 0">
-            <el-table-column v-for="(value, key) in step.data[0]" :key="key" :prop="String(key)" :label="String(key)" width="180" />
-          </el-table>
+      
+      <!-- SQL 展示 -->
+      <div v-if="result.sql" class="sql-section">
+        <div class="sql-header">
+          <span>生成的 SQL</span>
+          <el-tag size="small" type="info">{{ result.sqlExplanation }}</el-tag>
         </div>
-        <div v-if="result.finalReport" class="final-report">
-          <h4>分析报告</h4>
-          <div class="report-content">{{ result.finalReport }}</div>
-        </div>
+        <pre class="sql-code">{{ result.sql }}</pre>
       </div>
-      <template v-else>
-        <div class="conclusion">{{ result.conclusion }}</div>
-        <div class="chart-wrapper" ref="chartRef"></div>
-        <el-table :data="result.result" style="width: 100%; margin-top: 20px" v-if="result.result && result.result.length > 0">
-          <el-table-column v-for="(value, key) in result.result[0]" :key="key" :prop="String(key)" :label="String(key)" />
-        </el-table>
-      </template>
+      
+      <!-- 结论 -->
+      <div class="conclusion">{{ result.conclusion }}</div>
+      
+      <!-- 洞察 -->
+      <div v-if="result.insights && result.insights.length > 0" class="insights-section">
+        <h4>数据洞察</h4>
+        <el-alert
+          v-for="(insight, idx) in result.insights"
+          :key="idx"
+          :title="insight.title"
+          :description="insight.description"
+          :type="insight.importance === 'high' ? 'warning' : 'info'"
+          show-icon
+          style="margin-bottom: 10px"
+        />
+      </div>
+      
+      <!-- 图表 -->
+      <div class="chart-wrapper" ref="chartRef"></div>
+      
+      <!-- 数据表格 -->
+      <el-table :data="result.result" style="width: 100%; margin-top: 20px" v-if="result.result && result.result.length > 0">
+        <el-table-column v-for="(value, key) in result.result[0]" :key="key" :prop="String(key)" :label="String(key)" />
+      </el-table>
     </el-card>
   </div>
 </template>
@@ -82,7 +94,7 @@
 <script setup lang="ts">
 import { ref, onMounted, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
-import { datasourceApi, queryApi } from '../api';
+import { datasourceApi, agentApi } from '../api';
 import * as echarts from 'echarts';
 import { ElMessage } from 'element-plus';
 
@@ -103,11 +115,13 @@ const progressSteps = ref<ProgressStep[]>([]);
 const currentStepIndex = ref(0);
 
 const defaultSteps: ProgressStep[] = [
-  { title: '语义理解', description: '解析用户问题，匹配语义层', status: 'wait' },
-  { title: '模板匹配', description: '匹配分析模板或生成SQL', status: 'wait' },
-  { title: 'SQL执行', description: '执行数据库查询', status: 'wait' },
-  { title: '数据分析', description: '调用数据分析工具', status: 'wait' },
-  { title: '报告生成', description: '生成分析结论', status: 'wait' }
+  { title: 'NLU 分析', description: '理解用户意图，提取关键实体', status: 'wait' },
+  { title: '语义匹配', description: '映射业务术语到数据库字段', status: 'wait' },
+  { title: 'SQL 生成', description: '生成符合规范的 SQL 查询', status: 'wait' },
+  { title: 'SQL 校验', description: '校验 SQL 安全性', status: 'wait' },
+  { title: '执行查询', description: '执行数据库查询', status: 'wait' },
+  { title: '洞察分析', description: '分析数据，生成洞察', status: 'wait' },
+  { title: '可视化', description: '生成图表配置', status: 'wait' }
 ];
 
 onMounted(async () => {
@@ -125,22 +139,44 @@ async function handleQuery() {
   currentStepIndex.value = 0;
   
   try {
+    // 使用 Agent API
     progressSteps.value[0].status = 'process';
-    const res = await queryApi.execute(question.value, datasourceId.value || undefined);
+    
+    const res = await agentApi.query(question.value, datasourceId.value || undefined);
     
     if (res.data.success) {
-      progressSteps.value[0].status = 'finish';
-      progressSteps.value[1].status = 'finish';
-      progressSteps.value[2].status = 'finish';
-      progressSteps.value[3].status = 'finish';
-      progressSteps.value[4].status = 'finish';
-      currentStepIndex.value = 5;
+      // 标记所有步骤完成
+      progressSteps.value.forEach((s, i) => {
+        s.status = 'finish';
+      });
+      currentStepIndex.value = progressSteps.value.length;
       
-      result.value = res.data.data;
+      // 处理返回结果
+      const data = res.data.data;
+      
+      result.value = {
+        conclusion: data.summary || '查询完成',
+        result: data.data || [],
+        chartType: data.chartType || 'bar',
+        sql: data.sql,
+        sqlExplanation: data.sqlExplanation,
+        insights: data.insights || [],
+        chartConfig: data.chartConfig,
+      };
+      
       await nextTick();
-      if (result.value.type !== 'analysis') {
+      if (result.value.result && result.value.result.length > 0) {
         setTimeout(() => renderChart(), 100);
       }
+    } else {
+      // 处理错误
+      const errorMsg = res.data.errors?.[0]?.message || '查询失败';
+      ElMessage.error(errorMsg);
+      
+      // 标记失败步骤
+      progressSteps.value.forEach((s, i) => {
+        if (s.status === 'process') s.status = 'error';
+      });
     }
   } catch (e: any) {
     ElMessage.error(e.response?.data?.message || e.message || '查询失败');
@@ -291,6 +327,33 @@ function handleSave() {
   margin-bottom: 20px;
   font-size: 14px;
   line-height: 1.6;
+}
+.sql-section {
+  margin-bottom: 20px;
+}
+.sql-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  font-weight: 600;
+}
+.sql-code {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  padding: 15px;
+  border-radius: 4px;
+  font-family: 'Consolas', monospace;
+  font-size: 13px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+.insights-section {
+  margin-bottom: 20px;
+}
+.insights-section h4 {
+  margin: 0 0 15px 0;
+  color: #303133;
 }
 .chart-wrapper {
   width: 100%;

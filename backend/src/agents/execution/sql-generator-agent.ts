@@ -14,11 +14,53 @@ import {
 
 export interface SQLGeneratorInput {
   intent: string;
-  mappedFields: any[];
-  schema: any;
-  semanticRules?: any[];
-  joinHints?: any[];
+  entities: {
+    metrics: Array<{ field: string; table?: string; aggregation?: string }>;
+    dimensions: Array<{ field: string; table?: string }>;
+    filters?: Record<string, any>;
+    groupBy?: string[];
+    orderBy?: any;
+    limit?: number;
+  };
+  mappedFields?: any[];
+  schema?: any;
 }
+
+// 字段名映射（中文 -> 英文）
+const FIELD_MAPPING: Record<string, string> = {
+  '销售额': 'total_amount',
+  '销售金额': 'total_amount',
+  '订单数': 'order_id',
+  '订单量': 'order_id',
+  '客户数': 'customer_id',
+  '客户数量': 'customer_id',
+  '产品数': 'product_id',
+  '客户类型': 'customer_type',
+  '客户类别': 'customer_type',
+  '产品类别': 'category',
+  '类别': 'category',
+  '城市': 'city',
+  '国家': 'country',
+  '订单状态': 'order_status',
+  '支付方式': 'payment_method',
+  '制造商': 'manufacturer',
+  '厂家': 'manufacturer',
+};
+
+// 字段所属表映射
+const FIELD_TABLE_MAPPING: Record<string, string> = {
+  'total_amount': 'orders',
+  'order_id': 'orders',
+  'customer_id': 'customers',
+  'product_id': 'products',
+  'customer_type': 'customers',
+  'category': 'products',
+  'city': 'customers',
+  'country': 'customers',
+  'order_status': 'orders',
+  'payment_method': 'orders',
+  'manufacturer': 'products',
+};
 
 export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorOutput> {
   definition: AgentDefinition = {
@@ -30,142 +72,177 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
       type: 'object',
       properties: {
         intent: { type: 'string' },
+        entities: { type: 'object' },
         mappedFields: { type: 'array' },
-        schema: { type: 'object' },
       },
-      required: ['intent', 'mappedFields', 'schema'],
+      required: ['intent', 'entities'],
     },
     outputSchema: {
       type: 'object',
       properties: {
         sql: { type: 'string' },
         explanation: { type: 'string' },
-        estimatedRows: { type: 'number' },
       },
     },
   };
   
   constructor(llmClient: LLMClient) {
     super(llmClient, {
-      model: 'qwen-plus',  // 使用更强的模型
-      temperature: 0.1,    // 低温度，更确定性
+      temperature: 0.1,
       maxTokens: 1000,
-      maxRetries: 3,
+      maxRetries: 2,
     });
   }
   
   protected async run(input: SQLGeneratorInput, context: AgentContext): Promise<SQLGeneratorOutput> {
-    const systemPrompt = this.buildSystemPrompt(input);
-    const userPrompt = this.buildUserPrompt(input);
+    const { intent, entities } = input;
     
-    const response = await this.callLLM(userPrompt, systemPrompt);
-    return this.parseResponse(response);
-  }
-  
-  private buildSystemPrompt(input: SQLGeneratorInput): string {
-    const { schema, semanticRules } = input;
+    // 规范化字段名
+    const normalizedEntities = this.normalizeEntities(entities);
     
-    return `你是一个 SQL 生成专家。根据用户的需求和数据库结构，生成准确、安全的 SQL 查询。
-
-## 数据库结构
-\`\`\`json
-${JSON.stringify(schema, null, 2)}
-\`\`\`
-
-## 生成规则
-1. 只生成 SELECT 查询，禁止 INSERT/UPDATE/DELETE
-2. 使用正确的 SQL 语法（MySQL 兼容）
-3. 字段名使用反引号包裹
-4. 字符串值使用单引号
-5. 数字值不加引号
-6. 日期格式使用 YYYY-MM-DD
-7. 合理使用别名，让结果更易读
-8. 对于大表，考虑添加 LIMIT
-
-## 业务规则
-${semanticRules?.map(r => `- ${r.name}: ${r.description}`).join('\n') || '无特殊规则'}
-
-## 输出格式
-返回 JSON:
-{
-  "sql": "生成的 SQL",
-  "explanation": "SQL 解释",
-  "estimatedRows": 预估行数,
-  "warnings": ["警告信息"]
-}
-
-只返回 JSON，不要其他内容。`;
-  }
-  
-  private buildUserPrompt(input: SQLGeneratorInput): string {
-    const { intent, mappedFields, joinHints } = input;
-    
-    const fields = mappedFields.map(f => 
-      `- ${f.userTerm} → ${f.dbTable}.${f.dbField} (${f.fieldType})`
-    ).join('\n');
-    
-    const joins = joinHints?.map(j => 
-      `${j.fromTable} JOIN ${j.toTable} ON ${j.joinCondition}`
-    ).join('\n') || '无需关联';
-    
-    return `## 用户意图
-${intent}
-
-## 字段映射
-${fields}
-
-## 表关联提示
-${joins}
-
-请生成 SQL 查询。`;
-  }
-  
-  private parseResponse(response: string): SQLGeneratorOutput {
-    try {
-      const jsonMatch = response.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]);
-        return {
-          sql: parsed.sql || '',
-          explanation: parsed.explanation || '',
-          estimatedRows: parsed.estimatedRows,
-          warnings: parsed.warnings,
-        };
-      }
-    } catch (error) {
-      console.error('SQL Generator JSON 解析失败:', error);
+    // 如果有 groupBy，生成带 GROUP BY 的 SQL
+    if (normalizedEntities.groupBy?.length > 0) {
+      return this.generateGroupBySQL(normalizedEntities);
     }
     
-    // 尝试直接提取 SQL
-    const sqlMatch = response.match(/SELECT[\s\S]+?;/i);
-    if (sqlMatch) {
-      return {
-        sql: sqlMatch[0],
-        explanation: '自动提取的 SQL',
-      };
-    }
-    
-    throw new Error('无法解析 SQL 生成结果');
+    // 否则生成简单聚合 SQL
+    return this.generateSimpleSQL(normalizedEntities);
   }
   
   /**
-   * 重试：使用更简单的 prompt
+   * 规范化实体字段名
+   */
+  private normalizeEntities(entities: any): any {
+    const normalized = { ...entities };
+    
+    // 规范化指标
+    normalized.metrics = (entities.metrics || []).map((m: any) => {
+      const field = typeof m === 'string' ? m : (m.field || m);
+      const normalizedField = FIELD_MAPPING[field] || field;
+      return {
+        field: normalizedField,
+        table: FIELD_TABLE_MAPPING[normalizedField] || m.table || 'orders',
+        aggregation: m.aggregation || 'SUM',
+      };
+    });
+    
+    // 规范化维度
+    normalized.dimensions = (entities.dimensions || []).map((d: any) => {
+      const field = typeof d === 'string' ? d : (d.field || d);
+      const normalizedField = FIELD_MAPPING[field] || field;
+      return {
+        field: normalizedField,
+        table: FIELD_TABLE_MAPPING[normalizedField] || d.table || 'orders',
+      };
+    });
+    
+    // 规范化 groupBy
+    normalized.groupBy = (entities.groupBy || []).map((g: string) => {
+      return FIELD_MAPPING[g] || g;
+    });
+    
+    return normalized;
+  }
+  
+  /**
+   * 生成简单聚合 SQL
+   */
+  private generateSimpleSQL(entities: any): SQLGeneratorOutput {
+    const metrics = entities.metrics || [];
+    
+    if (metrics.length === 0) {
+      return {
+        sql: 'SELECT 1 LIMIT 1',
+        explanation: '无法识别查询内容',
+      };
+    }
+    
+    const metric = metrics[0];
+    const agg = metric.aggregation || 'SUM';
+    const table = metric.table || 'orders';
+    const field = metric.field || 'total_amount';
+    const alias = agg.toLowerCase();
+    
+    let sql = '';
+    
+    if (agg === 'COUNT') {
+      sql = `SELECT COUNT(\`${field}\`) AS \`${alias}\` FROM \`${table}\``;
+    } else if (agg === 'AVG') {
+      sql = `SELECT AVG(\`${field}\`) AS \`${alias}\` FROM \`${table}\``;
+    } else if (agg === 'MAX') {
+      sql = `SELECT MAX(\`${field}\`) AS \`${alias}\` FROM \`${table}\``;
+    } else if (agg === 'MIN') {
+      sql = `SELECT MIN(\`${field}\`) AS \`${alias}\` FROM \`${table}\``;
+    } else {
+      sql = `SELECT SUM(\`${field}\`) AS \`${alias}\` FROM \`${table}\``;
+    }
+    
+    sql += ' LIMIT 100';
+    
+    return {
+      sql,
+      explanation: `查询 ${table} 表的 ${field} 字段的 ${agg} 值`,
+    };
+  }
+  
+  /**
+   * 生成 GROUP BY SQL（支持 JOIN）
+   */
+  private generateGroupBySQL(entities: any): SQLGeneratorOutput {
+    const metrics = entities.metrics || [];
+    const groupBy = entities.groupBy || [];
+    
+    if (metrics.length === 0 || groupBy.length === 0) {
+      return this.generateSimpleSQL(entities);
+    }
+    
+    const metric = metrics[0];
+    const metricField = metric.field;
+    const metricTable = metric.table;
+    const metricAgg = metric.aggregation || 'SUM';
+    
+    const groupField = groupBy[0];
+    const groupTable = FIELD_TABLE_MAPPING[groupField] || 'orders';
+    
+    let sql = '';
+    let explanation = '';
+    
+    // 检查是否需要 JOIN
+    if (metricTable === groupTable) {
+      // 同一张表，简单 GROUP BY
+      sql = `SELECT \`${groupField}\`, ${metricAgg}(\`${metricField}\`) AS \`total\` FROM \`${metricTable}\` GROUP BY \`${groupField}\` ORDER BY \`total\` DESC LIMIT 100`;
+      explanation = `按 ${groupField} 分组统计 ${metricField}`;
+    } else {
+      // 需要 JOIN
+      if (metricTable === 'orders' && groupTable === 'customers') {
+        // 订单数据按客户维度分组
+        sql = `SELECT c.\`${groupField}\`, ${metricAgg}(o.\`${metricField}\`) AS \`total\` FROM \`orders\` o JOIN \`customers\` c ON o.customer_id = c.customer_id GROUP BY c.\`${groupField}\` ORDER BY \`total\` DESC LIMIT 100`;
+        explanation = `按客户${groupField}分组统计订单${metricField}`;
+      } else if (metricTable === 'orders' && groupTable === 'products') {
+        // 订单数据按产品维度分组（需要通过 order_items）
+        sql = `SELECT p.\`${groupField}\`, ${metricAgg}(oi.\`total\`) AS \`total\` FROM \`order_items\` oi JOIN \`products\` p ON oi.product_id = p.product_id GROUP BY p.\`${groupField}\` ORDER BY \`total\` DESC LIMIT 100`;
+        explanation = `按产品${groupField}分组统计销售额`;
+      } else if (groupTable === 'customers') {
+        // 客户数据分组
+        sql = `SELECT \`${groupField}\`, COUNT(*) AS \`count\` FROM \`customers\` GROUP BY \`${groupField}\` ORDER BY \`count\` DESC LIMIT 100`;
+        explanation = `按 ${groupField} 统计客户数量`;
+      } else {
+        // 默认：尝试简单 GROUP BY
+        sql = `SELECT \`${groupField}\`, ${metricAgg}(\`${metricField}\`) AS \`total\` FROM \`${metricTable}\` GROUP BY \`${groupField}\` ORDER BY \`total\` DESC LIMIT 100`;
+        explanation = `按 ${groupField} 分组统计`;
+      }
+    }
+    
+    return { sql, explanation };
+  }
+  
+  /**
+   * 重试：降级到简单 SQL
    */
   async retry(input: SQLGeneratorInput, context: AgentContext, error: any): Promise<AgentResult<SQLGeneratorOutput>> {
-    const simplePrompt = `根据以下字段生成 SQL 查询：
-表: ${input.schema.tables?.[0]?.name || 'unknown'}
-字段: ${input.mappedFields.map(f => f.dbField).join(', ')}
-筛选: ${JSON.stringify(input.mappedFields.filter(f => f.fieldType === 'filter'))}
-
-只返回 SQL 语句。`;
-    
     try {
-      const response = await this.callLLM(simplePrompt);
-      const sql = response.trim();
-      return this.success({
-        sql,
-        explanation: '简化生成的 SQL',
-      });
+      const normalizedEntities = this.normalizeEntities(input.entities);
+      return this.success(this.generateSimpleSQL(normalizedEntities));
     } catch (e) {
       return this.failure(error);
     }
