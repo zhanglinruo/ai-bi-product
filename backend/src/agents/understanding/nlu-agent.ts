@@ -2,6 +2,7 @@
  * NLU Agent - 自然语言理解
  * 
  * 负责理解用户意图，提取关键实体
+ * 支持：多条件筛选、时间范围、排序
  */
 
 import { LLMAgent, LLMClient } from '../base';
@@ -10,8 +11,6 @@ import {
   AgentContext,
   AgentResult,
   NLUOutput,
-  IntentType,
-  ExtractedEntities,
 } from '../types';
 
 export interface NLUInput {
@@ -23,16 +22,76 @@ export interface NLUInput {
   };
 }
 
+// 字段名映射（中文 -> 英文）
+const FIELD_MAPPING: Record<string, string> = {
+  '销售额': 'total_amount',
+  '销售金额': 'total_amount',
+  '订单数': 'order_id',
+  '订单量': 'order_id',
+  '客户数': 'customer_id',
+  '客户数量': 'customer_id',
+  '产品数': 'product_id',
+  '客户类型': 'customer_type',
+  '客户类别': 'customer_type',
+  '产品类别': 'category',
+  '类别': 'category',
+  '城市': 'city',
+  '国家': 'country',
+  '订单状态': 'order_status',
+  '支付方式': 'payment_method',
+  '制造商': 'manufacturer',
+  '厂家': 'manufacturer',
+  '零售': 'RETAIL',
+  '批发': 'WHOLESALE',
+  '分销商': 'DISTRIBUTOR',
+  '活跃': 'ACTIVE',
+  '已完成': 'DELIVERED',
+  '待处理': 'PENDING',
+  '已发货': 'SHIPPED',
+  '信用卡': 'CREDIT_CARD',
+  '银行转账': 'BANK_TRANSFER',
+};
+
+// 字段所属表映射
+const FIELD_TABLE_MAPPING: Record<string, string> = {
+  'total_amount': 'orders',
+  'order_id': 'orders',
+  'customer_id': 'customers',
+  'product_id': 'products',
+  'customer_type': 'customers',
+  'category': 'products',
+  'city': 'customers',
+  'country': 'customers',
+  'order_status': 'orders',
+  'payment_method': 'orders',
+  'manufacturer': 'products',
+};
+
+// 时间表达式映射
+const TIME_EXPRESSIONS: Record<string, { unit: string; value: number; operator: string }> = {
+  '今天': { unit: 'DAY', value: 0, operator: '=' },
+  '昨天': { unit: 'DAY', value: 1, operator: '=' },
+  '最近7天': { unit: 'DAY', value: 7, operator: '>=' },
+  '最近30天': { unit: 'DAY', value: 30, operator: '>=' },
+  '本周': { unit: 'WEEK', value: 1, operator: '>=' },
+  '本月': { unit: 'MONTH', value: 1, operator: '>=' },
+  '上月': { unit: 'MONTH', value: 2, operator: '=' },
+  '本季度': { unit: 'QUARTER', value: 1, operator: '>=' },
+  '上季度': { unit: 'QUARTER', value: 2, operator: '=' },
+  '今年': { unit: 'YEAR', value: 1, operator: '>=' },
+  '去年': { unit: 'YEAR', value: 2, operator: '=' },
+};
+
 export class NLUBAgent extends LLMAgent<NLUInput, NLUOutput> {
   definition: AgentDefinition = {
     name: 'nlu-agent',
-    description: '理解用户意图，提取关键实体（指标、维度、时间范围等）',
-    version: '1.0.0',
+    description: '理解用户意图，提取关键实体',
+    version: '2.0.0',
     layer: 'understanding',
     inputSchema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: '用户的自然语言查询' },
+        query: { type: 'string' },
         context: { type: 'object' },
       },
       required: ['query'],
@@ -40,7 +99,7 @@ export class NLUBAgent extends LLMAgent<NLUInput, NLUOutput> {
     outputSchema: {
       type: 'object',
       properties: {
-        intent: { type: 'string', enum: ['query', 'analysis', 'comparison', 'trend', 'unknown'] },
+        intent: { type: 'string' },
         confidence: { type: 'number' },
         entities: { type: 'object' },
       },
@@ -56,218 +115,242 @@ export class NLUBAgent extends LLMAgent<NLUInput, NLUOutput> {
   }
   
   protected async run(input: NLUInput, context: AgentContext): Promise<NLUOutput> {
-    const systemPrompt = this.buildSystemPrompt(context);
-    const response = await this.callLLM(input.query, systemPrompt);
+    const query = input.query;
     
-    // 解析 LLM 返回的 JSON
-    const result = this.parseResponse(response);
+    // 使用规则匹配（更快、更可靠）
+    const result = this.extractEntities(query);
     
-    // 验证和修正
-    return this.validateAndFix(result, input.query);
+    return result;
   }
   
-  private buildSystemPrompt(context: AgentContext): string {
-    return `你是一个自然语言理解专家，负责分析用户的数据查询意图。
-
-请分析用户的问题，返回以下 JSON 格式：
-{
-  "intent": "query|analysis|comparison|trend|unknown",
-  "confidence": 0.0-1.0,
-  "entities": {
-    "metrics": [{"field": "字段名", "table": "表名", "aggregation": "SUM|COUNT|AVG|MAX|MIN"}],
-    "dimensions": [{"field": "字段名", "table": "表名", "value": "可选的筛选值"}],
-    "filters": {"字段": "值"},
-    "timeRange": {"type": "relative", "value": "last_7_days"} 或 {"type": "absolute", "start": "2024-01-01", "end": "2024-12-31"},
-    "aggregations": ["SUM", "AVG", "COUNT"],
-    "limit": 数字,
-    "orderBy": {"field": "字段名", "direction": "asc|desc"},
-    "groupBy": ["维度字段"]
-  },
-  "rewrittenQuery": "改写后的更清晰的问题（可选）"
-}
-
-意图类型说明：
-- query: 简单数据查询，如"销售额是多少"
-- analysis: 分析型查询，如"为什么销售额下降"
-- comparison: 对比型查询，如"华东和华北的销售额对比"
-- trend: 趋势型查询，如"销售额的变化趋势"
-
-时间范围说明：
-- relative: last_7_days, last_30_days, this_week, this_month, this_quarter, last_quarter, this_year
-- absolute: 具体日期范围
-
-重要提示：
-1. 如果用户提到"按...分组"、"每个..."、"各..."，需要在 groupBy 中添加维度
-2. 如果用户提到"对比"、"比较"，intent 设为 comparison
-3. 如果用户提到"趋势"、"变化"，intent 设为 trend
-4. metrics 是数值型指标，dimensions 是分组/筛选的维度
-
-用户上下文：
-- 用户ID: ${context.userId || 'anonymous'}
-${context.history?.length ? `- 最近对话: ${context.history.slice(-3).map(h => h.content).join(' -> ')}` : ''}
-
-只返回 JSON，不要其他解释。`;
-  }
-  
-  private parseResponse(response: string): NLUOutput {
-    try {
-      // 尝试提取 JSON
-      const jsonMatch = response.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        return JSON.parse(jsonMatch[0]);
-      }
-    } catch (error) {
-      console.error('NLU Agent JSON 解析失败:', error);
-    }
-    
-    // 返回默认值
-    return {
-      intent: 'unknown',
-      confidence: 0,
+  /**
+   * 提取实体（规则匹配）
+   */
+  private extractEntities(query: string): NLUOutput {
+    const result: NLUOutput = {
+      intent: 'query',
+      confidence: 0.8,
       entities: {
         metrics: [],
         dimensions: [],
         filters: {},
+        groupBy: [],
+        orderBy: null,
+        limit: 100,
+        timeRange: null,
       },
     };
-  }
-  
-  private validateAndFix(result: NLUOutput, originalQuery: string): NLUOutput {
-    // 确保所有字段都存在
-    result.entities = {
-      metrics: result.entities?.metrics || [],
-      dimensions: result.entities?.dimensions || [],
-      filters: result.entities?.filters || {},
-      timeRange: result.entities?.timeRange,
-      aggregations: result.entities?.aggregations,
-      limit: result.entities?.limit,
-      orderBy: result.entities?.orderBy,
-      groupBy: result.entities?.groupBy || [],
-    };
     
-    // 如果置信度太低，标记为需要澄清
-    if (result.confidence < 0.5) {
-      result.intent = 'unknown';
+    // 1. 提取指标
+    result.entities.metrics = this.extractMetrics(query);
+    
+    // 2. 提取维度和分组
+    const dimensions = this.extractDimensions(query);
+    result.entities.dimensions = dimensions;
+    
+    // 检查是否需要 GROUP BY
+    if (/按|每个|各|分别|不同|各类/.test(query)) {
+      result.entities.groupBy = dimensions.map(d => d.field);
     }
     
-    // 自动检测 GROUP BY 关键词
-    const groupByPatterns = /按|每个|各|分别|不同|各类/i;
-    if (groupByPatterns.test(originalQuery) && result.entities.groupBy?.length === 0) {
-      // 尝试从 dimensions 中推断
-      if (result.entities.dimensions.length > 0) {
-        result.entities.groupBy = result.entities.dimensions.map(d => d.field);
-      }
+    // 3. 提取筛选条件
+    result.entities.filters = this.extractFilters(query);
+    
+    // 4. 提取时间范围
+    result.entities.timeRange = this.extractTimeRange(query);
+    
+    // 5. 提取排序
+    result.entities.orderBy = this.extractOrderBy(query);
+    
+    // 6. 提取 LIMIT
+    const limitMatch = query.match(/前(\d+)/);
+    if (limitMatch) {
+      result.entities.limit = parseInt(limitMatch[1]);
     }
     
-    // 如果没有提取到任何实体，尝试从原文推断
-    if (result.entities.metrics.length === 0) {
-      result = this.inferFromKeywords(result, originalQuery);
+    // 7. 判断意图
+    if (/对比|比较|差异/.test(query)) {
+      result.intent = 'comparison';
+    } else if (/趋势|变化|增长|下降/.test(query)) {
+      result.intent = 'trend';
+    } else if (/为什么|原因|分析/.test(query)) {
+      result.intent = 'analysis';
     }
     
     return result;
   }
   
   /**
-   * 基于关键词推断
+   * 提取指标
    */
-  private inferFromKeywords(result: NLUOutput, query: string): NLUOutput {
-    // 指标关键词
-    const metricPatterns = [
-      { pattern: /销售额?|销售金额|销售总额/, field: 'total_amount', table: 'orders', agg: 'SUM' },
-      { pattern: /订单数|订单量|订单总数|有多少订单/, field: 'order_id', table: 'orders', agg: 'COUNT' },
-      { pattern: /客户数|客户总数|客户数量/, field: 'customer_id', table: 'customers', agg: 'COUNT' },
-      { pattern: /产品数|商品数/, field: 'product_id', table: 'products', agg: 'COUNT' },
-      { pattern: /平均.*订单|客单价|平均.*金额/, field: 'total_amount', table: 'orders', agg: 'AVG' },
-      { pattern: /最高|最大/, field: 'total_amount', table: 'orders', agg: 'MAX' },
-      { pattern: /最低|最小/, field: 'total_amount', table: 'orders', agg: 'MIN' },
+  private extractMetrics(query: string): any[] {
+    const metrics: any[] = [];
+    
+    const patterns = [
+      { regex: /销售额?|销售金额|销售总额/, field: 'total_amount', table: 'orders', agg: 'SUM' },
+      { regex: /订单数|订单量|有多少订单/, field: 'order_id', table: 'orders', agg: 'COUNT' },
+      { regex: /客户数|客户总数|客户数量/, field: 'customer_id', table: 'customers', agg: 'COUNT' },
+      { regex: /产品数|商品数/, field: 'product_id', table: 'products', agg: 'COUNT' },
+      { regex: /平均.*订单|客单价|平均.*金额/, field: 'total_amount', table: 'orders', agg: 'AVG' },
+      { regex: /最高|最大|最多的/, field: 'total_amount', table: 'orders', agg: 'MAX' },
+      { regex: /最低|最小|最少的/, field: 'total_amount', table: 'orders', agg: 'MIN' },
     ];
     
-    for (const p of metricPatterns) {
-      if (p.pattern.test(query)) {
-        result.entities.metrics.push({ 
-          field: p.field, 
-          table: p.table, 
-          aggregation: p.agg 
-        });
-        result.confidence = Math.max(result.confidence, 0.6);
-      }
-    }
-    
-    // 维度关键词
-    const dimensionPatterns = [
-      { pattern: /客户类型|客户类别/, field: 'customer_type', table: 'customers' },
-      { pattern: /产品类别|产品分类|类别/, field: 'category', table: 'products' },
-      { pattern: /城市/, field: 'city', table: 'customers' },
-      { pattern: /国家/, field: 'country', table: 'customers' },
-      { pattern: /订单状态/, field: 'order_status', table: 'orders' },
-      { pattern: /支付方式/, field: 'payment_method', table: 'orders' },
-      { pattern: /制造商|厂家/, field: 'manufacturer', table: 'products' },
-    ];
-    
-    for (const p of dimensionPatterns) {
-      if (p.pattern.test(query)) {
-        result.entities.dimensions.push({ 
-          field: p.field, 
-          table: p.table 
-        });
-        
-        // 如果查询包含"按"等关键词，添加到 groupBy
-        if (/按|每个|各/.test(query)) {
-          if (!result.entities.groupBy?.includes(p.field)) {
-            result.entities.groupBy = result.entities.groupBy || [];
-            result.entities.groupBy.push(p.field);
-          }
+    for (const p of patterns) {
+      if (p.regex.test(query)) {
+        // 避免重复添加
+        if (!metrics.find(m => m.field === p.field && m.aggregation === p.agg)) {
+          metrics.push({
+            field: p.field,
+            table: p.table,
+            aggregation: p.agg,
+          });
         }
       }
     }
     
-    return result;
+    return metrics;
   }
   
   /**
-   * 重试逻辑：简化 prompt 重试
+   * 提取维度
    */
-  async retry(input: NLUInput, context: AgentContext, error: any): Promise<AgentResult<NLUOutput>> {
-    // 使用更简单的 prompt 重试
-    const simplePrompt = `分析这句话的意图，返回 JSON:
-{"intent": "query|analysis|comparison|trend", "metrics": [{"field": "字段名"}], "dimensions": [{"field": "字段名"}], "groupBy": []}
-
-句子: ${input.query}`;
+  private extractDimensions(query: string): any[] {
+    const dimensions: any[] = [];
     
-    try {
-      const response = await this.callLLM(simplePrompt);
-      const result = this.parseResponse(response);
-      return this.success(result);
-    } catch (e) {
-      // 降级：使用关键词匹配
-      const fallbackResult: NLUOutput = {
-        intent: 'query',
-        confidence: 0.3,
-        entities: {
-          metrics: [],
-          dimensions: [],
-          filters: {},
-        },
-      };
-      return this.success(this.inferFromKeywords(fallbackResult, input.query));
+    const patterns = [
+      { regex: /客户类型|客户类别/, field: 'customer_type', table: 'customers' },
+      { regex: /产品类别|产品分类/, field: 'category', table: 'products' },
+      { regex: /城市/, field: 'city', table: 'customers' },
+      { regex: /国家/, field: 'country', table: 'customers' },
+      { regex: /订单状态/, field: 'order_status', table: 'orders' },
+      { regex: /支付方式/, field: 'payment_method', table: 'orders' },
+      { regex: /制造商|厂家/, field: 'manufacturer', table: 'products' },
+    ];
+    
+    for (const p of patterns) {
+      if (p.regex.test(query)) {
+        if (!dimensions.find(d => d.field === p.field)) {
+          dimensions.push({
+            field: p.field,
+            table: p.table,
+          });
+        }
+      }
     }
+    
+    return dimensions;
   }
   
   /**
-   * 降级处理：返回基础分析
+   * 提取筛选条件
+   */
+  private extractFilters(query: string): Record<string, any> {
+    const filters: Record<string, any> = {};
+    
+    // 客户类型
+    if (/零售/.test(query)) {
+      filters['customer_type'] = 'RETAIL';
+    } else if (/批发/.test(query)) {
+      filters['customer_type'] = 'WHOLESALE';
+    } else if (/分销商/.test(query)) {
+      filters['customer_type'] = 'DISTRIBUTOR';
+    }
+    
+    // 订单状态
+    if (/已完成|完成/.test(query)) {
+      filters['order_status'] = 'DELIVERED';
+    } else if (/待处理/.test(query)) {
+      filters['order_status'] = 'PENDING';
+    } else if (/已发货/.test(query)) {
+      filters['order_status'] = 'SHIPPED';
+    } else if (/已取消/.test(query)) {
+      filters['order_status'] = 'CANCELLED';
+    }
+    
+    // 支付方式
+    if (/信用卡/.test(query)) {
+      filters['payment_method'] = 'CREDIT_CARD';
+    } else if (/银行转账/.test(query)) {
+      filters['payment_method'] = 'BANK_TRANSFER';
+    } else if (/现金/.test(query)) {
+      filters['payment_method'] = 'CASH';
+    }
+    
+    // 账户状态
+    if (/活跃/.test(query)) {
+      filters['account_status'] = 'ACTIVE';
+    }
+    
+    // 地区（城市名称匹配）
+    const cityPatterns = [
+      /北京|上海|广州|深圳|杭州|南京|武汉|成都|西安|重庆/,
+    ];
+    for (const pattern of cityPatterns) {
+      const match = query.match(pattern);
+      if (match) {
+        filters['city'] = match[0];
+        break;
+      }
+    }
+    
+    return filters;
+  }
+  
+  /**
+   * 提取时间范围
+   */
+  private extractTimeRange(query: string): any | null {
+    for (const [expr, config] of Object.entries(TIME_EXPRESSIONS)) {
+      if (query.includes(expr)) {
+        return {
+          expression: expr,
+          unit: config.unit,
+          value: config.value,
+          operator: config.operator,
+        };
+      }
+    }
+    
+    // 检查年份
+    const yearMatch = query.match(/(\d{4})年/);
+    if (yearMatch) {
+      return {
+        expression: 'year',
+        year: parseInt(yearMatch[1]),
+      };
+    }
+    
+    // 检查月份
+    const monthMatch = query.match(/(\d{1,2})月/);
+    if (monthMatch) {
+      return {
+        expression: 'month',
+        month: parseInt(monthMatch[1]),
+      };
+    }
+    
+    return null;
+  }
+  
+  /**
+   * 提取排序
+   */
+  private extractOrderBy(query: string): any | null {
+    if (/最高|最多|最大的|排名前/.test(query)) {
+      return { direction: 'DESC' };
+    }
+    if (/最低|最少|最小的/.test(query)) {
+      return { direction: 'ASC' };
+    }
+    return null;
+  }
+  
+  /**
+   * 降级处理
    */
   async fallback(input: NLUInput, context: AgentContext): Promise<AgentResult<NLUOutput>> {
-    const result: NLUOutput = {
-      intent: 'query',
-      confidence: 0.3,
-      entities: {
-        metrics: [],
-        dimensions: [],
-        filters: {},
-      },
-      rewrittenQuery: input.query,
-    };
-    
-    return this.success(this.inferFromKeywords(result, input.query));
+    const result = this.extractEntities(input.query);
+    return this.success(result);
   }
 }

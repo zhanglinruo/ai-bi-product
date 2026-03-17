@@ -2,6 +2,7 @@
  * SQL Generator Agent - SQL 生成器
  * 
  * 负责将结构化意图转换为 SQL
+ * 支持：多条件筛选、时间范围、排序、JOIN
  */
 
 import { LLMAgent, LLMClient } from '../base';
@@ -19,33 +20,12 @@ export interface SQLGeneratorInput {
     dimensions: Array<{ field: string; table?: string }>;
     filters?: Record<string, any>;
     groupBy?: string[];
-    orderBy?: any;
+    orderBy?: { direction: string } | null;
     limit?: number;
+    timeRange?: any;
   };
   mappedFields?: any[];
-  schema?: any;
 }
-
-// 字段名映射（中文 -> 英文）
-const FIELD_MAPPING: Record<string, string> = {
-  '销售额': 'total_amount',
-  '销售金额': 'total_amount',
-  '订单数': 'order_id',
-  '订单量': 'order_id',
-  '客户数': 'customer_id',
-  '客户数量': 'customer_id',
-  '产品数': 'product_id',
-  '客户类型': 'customer_type',
-  '客户类别': 'customer_type',
-  '产品类别': 'category',
-  '类别': 'category',
-  '城市': 'city',
-  '国家': 'country',
-  '订单状态': 'order_status',
-  '支付方式': 'payment_method',
-  '制造商': 'manufacturer',
-  '厂家': 'manufacturer',
-};
 
 // 字段所属表映射
 const FIELD_TABLE_MAPPING: Record<string, string> = {
@@ -59,6 +39,7 @@ const FIELD_TABLE_MAPPING: Record<string, string> = {
   'country': 'customers',
   'order_status': 'orders',
   'payment_method': 'orders',
+  'account_status': 'customers',
   'manufacturer': 'products',
 };
 
@@ -66,14 +47,13 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
   definition: AgentDefinition = {
     name: 'sql-generator-agent',
     description: '将结构化意图转换为符合规范的 SQL',
-    version: '1.0.0',
+    version: '2.0.0',
     layer: 'execution',
     inputSchema: {
       type: 'object',
       properties: {
         intent: { type: 'string' },
         entities: { type: 'object' },
-        mappedFields: { type: 'array' },
       },
       required: ['intent', 'entities'],
     },
@@ -95,53 +75,15 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
   }
   
   protected async run(input: SQLGeneratorInput, context: AgentContext): Promise<SQLGeneratorOutput> {
-    const { intent, entities } = input;
+    const { entities } = input;
     
-    // 规范化字段名
-    const normalizedEntities = this.normalizeEntities(entities);
-    
-    // 如果有 groupBy，生成带 GROUP BY 的 SQL
-    if (normalizedEntities.groupBy?.length > 0) {
-      return this.generateGroupBySQL(normalizedEntities);
+    // 如果有 groupBy，生成 GROUP BY SQL
+    if (entities.groupBy?.length > 0) {
+      return this.generateGroupBySQL(entities);
     }
     
     // 否则生成简单聚合 SQL
-    return this.generateSimpleSQL(normalizedEntities);
-  }
-  
-  /**
-   * 规范化实体字段名
-   */
-  private normalizeEntities(entities: any): any {
-    const normalized = { ...entities };
-    
-    // 规范化指标
-    normalized.metrics = (entities.metrics || []).map((m: any) => {
-      const field = typeof m === 'string' ? m : (m.field || m);
-      const normalizedField = FIELD_MAPPING[field] || field;
-      return {
-        field: normalizedField,
-        table: FIELD_TABLE_MAPPING[normalizedField] || m.table || 'orders',
-        aggregation: m.aggregation || 'SUM',
-      };
-    });
-    
-    // 规范化维度
-    normalized.dimensions = (entities.dimensions || []).map((d: any) => {
-      const field = typeof d === 'string' ? d : (d.field || d);
-      const normalizedField = FIELD_MAPPING[field] || field;
-      return {
-        field: normalizedField,
-        table: FIELD_TABLE_MAPPING[normalizedField] || d.table || 'orders',
-      };
-    });
-    
-    // 规范化 groupBy
-    normalized.groupBy = (entities.groupBy || []).map((g: string) => {
-      return FIELD_MAPPING[g] || g;
-    });
-    
-    return normalized;
+    return this.generateSimpleSQL(entities);
   }
   
   /**
@@ -152,32 +94,36 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
     
     if (metrics.length === 0) {
       return {
-        sql: 'SELECT 1 LIMIT 1',
+        sql: 'SELECT 1 AS result LIMIT 1',
         explanation: '无法识别查询内容',
       };
     }
     
     const metric = metrics[0];
     const agg = metric.aggregation || 'SUM';
-    const table = metric.table || 'orders';
-    const field = metric.field || 'total_amount';
+    const table = metric.table || FIELD_TABLE_MAPPING[metric.field] || 'orders';
+    const field = metric.field;
     const alias = agg.toLowerCase();
     
-    let sql = '';
+    // 构建 SELECT
+    let sql = `SELECT ${agg}(\`${field}\`) AS \`${alias}\``;
     
-    if (agg === 'COUNT') {
-      sql = `SELECT COUNT(\`${field}\`) AS \`${alias}\` FROM \`${table}\``;
-    } else if (agg === 'AVG') {
-      sql = `SELECT AVG(\`${field}\`) AS \`${alias}\` FROM \`${table}\``;
-    } else if (agg === 'MAX') {
-      sql = `SELECT MAX(\`${field}\`) AS \`${alias}\` FROM \`${table}\``;
-    } else if (agg === 'MIN') {
-      sql = `SELECT MIN(\`${field}\`) AS \`${alias}\` FROM \`${table}\``;
-    } else {
-      sql = `SELECT SUM(\`${field}\`) AS \`${alias}\` FROM \`${table}\``;
+    // 构建 FROM
+    sql += ` FROM \`${table}\``;
+    
+    // 构建 WHERE
+    const whereClauses = this.buildWhereClauses(entities, table);
+    if (whereClauses.length > 0) {
+      sql += ` WHERE ${whereClauses.join(' AND ')}`;
     }
     
-    sql += ' LIMIT 100';
+    // 构建 ORDER BY
+    if (entities.orderBy) {
+      sql += ` ORDER BY \`${alias}\` ${entities.orderBy.direction}`;
+    }
+    
+    // 构建 LIMIT
+    sql += ` LIMIT ${entities.limit || 100}`;
     
     return {
       sql,
@@ -186,11 +132,12 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
   }
   
   /**
-   * 生成 GROUP BY SQL（支持 JOIN）
+   * 生成 GROUP BY SQL
    */
   private generateGroupBySQL(entities: any): SQLGeneratorOutput {
     const metrics = entities.metrics || [];
     const groupBy = entities.groupBy || [];
+    const filters = entities.filters || {};
     
     if (metrics.length === 0 || groupBy.length === 0) {
       return this.generateSimpleSQL(entities);
@@ -198,7 +145,7 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
     
     const metric = metrics[0];
     const metricField = metric.field;
-    const metricTable = metric.table;
+    const metricTable = metric.table || FIELD_TABLE_MAPPING[metricField] || 'orders';
     const metricAgg = metric.aggregation || 'SUM';
     
     const groupField = groupBy[0];
@@ -207,44 +154,191 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
     let sql = '';
     let explanation = '';
     
-    // 检查是否需要 JOIN
+    // 同一张表
     if (metricTable === groupTable) {
-      // 同一张表，简单 GROUP BY
-      sql = `SELECT \`${groupField}\`, ${metricAgg}(\`${metricField}\`) AS \`total\` FROM \`${metricTable}\` GROUP BY \`${groupField}\` ORDER BY \`total\` DESC LIMIT 100`;
+      sql = this.buildSingleTableGroupSQL(metricField, metricAgg, metricTable, groupField, filters, entities);
       explanation = `按 ${groupField} 分组统计 ${metricField}`;
     } else {
       // 需要 JOIN
-      if (metricTable === 'orders' && groupTable === 'customers') {
-        // 订单数据按客户维度分组
-        sql = `SELECT c.\`${groupField}\`, ${metricAgg}(o.\`${metricField}\`) AS \`total\` FROM \`orders\` o JOIN \`customers\` c ON o.customer_id = c.customer_id GROUP BY c.\`${groupField}\` ORDER BY \`total\` DESC LIMIT 100`;
-        explanation = `按客户${groupField}分组统计订单${metricField}`;
-      } else if (metricTable === 'orders' && groupTable === 'products') {
-        // 订单数据按产品维度分组（需要通过 order_items）
-        sql = `SELECT p.\`${groupField}\`, ${metricAgg}(oi.\`total\`) AS \`total\` FROM \`order_items\` oi JOIN \`products\` p ON oi.product_id = p.product_id GROUP BY p.\`${groupField}\` ORDER BY \`total\` DESC LIMIT 100`;
-        explanation = `按产品${groupField}分组统计销售额`;
-      } else if (groupTable === 'customers') {
-        // 客户数据分组
-        sql = `SELECT \`${groupField}\`, COUNT(*) AS \`count\` FROM \`customers\` GROUP BY \`${groupField}\` ORDER BY \`count\` DESC LIMIT 100`;
-        explanation = `按 ${groupField} 统计客户数量`;
-      } else {
-        // 默认：尝试简单 GROUP BY
-        sql = `SELECT \`${groupField}\`, ${metricAgg}(\`${metricField}\`) AS \`total\` FROM \`${metricTable}\` GROUP BY \`${groupField}\` ORDER BY \`total\` DESC LIMIT 100`;
-        explanation = `按 ${groupField} 分组统计`;
-      }
+      sql = this.buildJoinGroupSQL(metricField, metricAgg, metricTable, groupField, groupTable, filters, entities);
+      explanation = `按 ${groupField} 分组统计（跨表关联）`;
     }
     
     return { sql, explanation };
   }
   
   /**
+   * 构建单表 GROUP BY SQL
+   */
+  private buildSingleTableGroupSQL(
+    metricField: string,
+    metricAgg: string,
+    table: string,
+    groupField: string,
+    filters: Record<string, any>,
+    entities: any
+  ): string {
+    let sql = `SELECT \`${groupField}\`, ${metricAgg}(\`${metricField}\`) AS \`total\` FROM \`${table}\``;
+    
+    // WHERE 条件（排除分组字段）
+    const whereClauses: string[] = [];
+    for (const [field, value] of Object.entries(filters)) {
+      if (field !== groupField) {
+        whereClauses.push(`\`${field}\` = '${value}'`);
+      }
+    }
+    
+    // 时间范围
+    if (entities.timeRange) {
+      whereClauses.push(this.buildTimeCondition(entities.timeRange, table));
+    }
+    
+    if (whereClauses.length > 0) {
+      sql += ` WHERE ${whereClauses.join(' AND ')}`;
+    }
+    
+    sql += ` GROUP BY \`${groupField}\``;
+    
+    // ORDER BY
+    const direction = entities.orderBy?.direction || 'DESC';
+    sql += ` ORDER BY \`total\` ${direction}`;
+    
+    sql += ` LIMIT ${entities.limit || 100}`;
+    
+    return sql;
+  }
+  
+  /**
+   * 构建 JOIN GROUP BY SQL
+   */
+  private buildJoinGroupSQL(
+    metricField: string,
+    metricAgg: string,
+    metricTable: string,
+    groupField: string,
+    groupTable: string,
+    filters: Record<string, any>,
+    entities: any
+  ): string {
+    let sql = '';
+    
+    if (metricTable === 'orders' && groupTable === 'customers') {
+      sql = `SELECT c.\`${groupField}\`, ${metricAgg}(o.\`${metricField}\`) AS \`total\` FROM \`orders\` o JOIN \`customers\` c ON o.customer_id = c.customer_id`;
+      
+      // WHERE 条件
+      const whereClauses: string[] = [];
+      for (const [field, value] of Object.entries(filters)) {
+        if (field === groupField) {
+          whereClauses.push(`c.\`${field}\` = '${value}'`);
+        } else if (FIELD_TABLE_MAPPING[field] === 'customers') {
+          whereClauses.push(`c.\`${field}\` = '${value}'`);
+        } else {
+          whereClauses.push(`o.\`${field}\` = '${value}'`);
+        }
+      }
+      
+      if (entities.timeRange) {
+        whereClauses.push(this.buildTimeCondition(entities.timeRange, 'o'));
+      }
+      
+      if (whereClauses.length > 0) {
+        sql += ` WHERE ${whereClauses.join(' AND ')}`;
+      }
+      
+      sql += ` GROUP BY c.\`${groupField}\``;
+      
+    } else if (metricTable === 'orders' && groupTable === 'products') {
+      sql = `SELECT p.\`${groupField}\`, SUM(oi.total) AS \`total\` FROM \`order_items\` oi JOIN \`products\` p ON oi.product_id = p.product_id`;
+      
+      // WHERE 条件
+      const whereClauses: string[] = [];
+      for (const [field, value] of Object.entries(filters)) {
+        if (field === groupField) {
+          whereClauses.push(`p.\`${field}\` = '${value}'`);
+        }
+      }
+      
+      if (whereClauses.length > 0) {
+        sql += ` WHERE ${whereClauses.join(' AND ')}`;
+      }
+      
+      sql += ` GROUP BY p.\`${groupField}\``;
+      
+    } else if (groupTable === 'customers') {
+      // 客户统计
+      sql = `SELECT \`${groupField}\`, COUNT(*) AS \`count\` FROM \`customers\``;
+      
+      const whereClauses: string[] = [];
+      for (const [field, value] of Object.entries(filters)) {
+        whereClauses.push(`\`${field}\` = '${value}'`);
+      }
+      
+      if (whereClauses.length > 0) {
+        sql += ` WHERE ${whereClauses.join(' AND ')}`;
+      }
+      
+      sql += ` GROUP BY \`${groupField}\``;
+    } else {
+      // 默认：简单 GROUP BY
+      sql = `SELECT \`${groupField}\`, ${metricAgg}(\`${metricField}\`) AS \`total\` FROM \`${metricTable}\` GROUP BY \`${groupField}\``;
+    }
+    
+    // ORDER BY
+    const direction = entities.orderBy?.direction || 'DESC';
+    sql += ` ORDER BY \`total\` ${direction}`;
+    
+    sql += ` LIMIT ${entities.limit || 100}`;
+    
+    return sql;
+  }
+  
+  /**
+   * 构建 WHERE 条件
+   */
+  private buildWhereClauses(entities: any, table: string): string[] {
+    const clauses: string[] = [];
+    
+    // 筛选条件
+    for (const [field, value] of Object.entries(entities.filters || {})) {
+      clauses.push(`\`${field}\` = '${value}'`);
+    }
+    
+    // 时间范围
+    if (entities.timeRange) {
+      clauses.push(this.buildTimeCondition(entities.timeRange, table));
+    }
+    
+    return clauses;
+  }
+  
+  /**
+   * 构建时间条件
+   */
+  private buildTimeCondition(timeRange: any, tablePrefix: string = ''): string {
+    const prefix = tablePrefix ? `${tablePrefix}.` : '';
+    
+    if (timeRange.expression === 'year') {
+      return `YEAR(${prefix}order_date) = ${timeRange.year}`;
+    }
+    
+    if (timeRange.expression === 'month') {
+      return `MONTH(${prefix}order_date) = ${timeRange.month}`;
+    }
+    
+    const { unit, value, operator } = timeRange;
+    const dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value} ${unit})`;
+    
+    if (operator === '=') {
+      return `DATE(${prefix}order_date) = ${dateFunc}`;
+    } else {
+      return `DATE(${prefix}order_date) >= ${dateFunc}`;
+    }
+  }
+  
+  /**
    * 重试：降级到简单 SQL
    */
   async retry(input: SQLGeneratorInput, context: AgentContext, error: any): Promise<AgentResult<SQLGeneratorOutput>> {
-    try {
-      const normalizedEntities = this.normalizeEntities(input.entities);
-      return this.success(this.generateSimpleSQL(normalizedEntities));
-    } catch (e) {
-      return this.failure(error);
-    }
+    return this.success(this.generateSimpleSQL(input.entities));
   }
 }
