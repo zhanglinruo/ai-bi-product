@@ -28,6 +28,7 @@ import { ValidatorAgent } from '../agents/execution/validator-agent';
 import { ExecutorAgent } from '../agents/execution/executor-agent';
 import { InsightAgent } from '../agents/output/insight-agent';
 import { VisualizationAgent } from '../agents/output/visualization-agent';
+import { contextManager, ContextManager } from '../utils/context-manager';
 
 /**
  * 完整的查询结果
@@ -105,6 +106,19 @@ export class AgentOrchestrator {
     const result: QueryResult = { success: true };
     const errors: AgentError[] = [];
     
+    // 获取或创建会话上下文
+    const sessionId = context.sessionId || `session_${Date.now()}`;
+    const sessionContext = contextManager.getOrCreate(sessionId, context.userId);
+    
+    // 检查是否是追问
+    const isFollowUp = contextManager.isFollowUp(query);
+    const previousEntities = contextManager.getPreviousEntities(sessionId);
+    
+    if (this.config.debug) {
+      console.log(`[Orchestrator] 会话ID: ${sessionId}`);
+      console.log(`[Orchestrator] 是否追问: ${isFollowUp}`);
+    }
+    
     try {
       // ========================================
       // 第 1 层：理解层
@@ -124,10 +138,21 @@ export class AgentOrchestrator {
       result.intent = nluResult.data!.intent;
       result.entities = nluResult.data!.entities;
       
+      // 如果是追问，合并之前的实体
+      if (isFollowUp && previousEntities) {
+        result.entities = contextManager.mergeFollowUpEntities(previousEntities, result.entities);
+        if (this.config.debug) {
+          console.log(`[Orchestrator] 合并追问实体: ${JSON.stringify(result.entities)}`);
+        }
+      }
+      
+      // 添加用户消息
+      contextManager.addMessage(sessionId, 'user', query);
+      
       // 1.2 Semantic Agent
       if (this.config.debug) console.log('[Orchestrator] 执行 Semantic Agent...');
       const semanticResult = await this.executeAgent<SemanticOutput>('semantic-agent', {
-        entities: nluResult.data!.entities,
+        entities: result.entities,
         query,
       }, context);
       
@@ -158,8 +183,8 @@ export class AgentOrchestrator {
       // 2.1 SQL Generator Agent
       if (this.config.debug) console.log('[Orchestrator] 执行 SQL Generator Agent...');
       const sqlResult = await this.executeAgent<SQLGeneratorOutput>('sql-generator-agent', {
-        intent: nluResult.data!.intent,
-        entities: nluResult.data!.entities,
+        intent: result.intent,
+        entities: result.entities,
         mappedFields: semanticResult.data?.mappedFields || [],
       }, context);
       
@@ -257,6 +282,15 @@ export class AgentOrchestrator {
     
     result.executionTime = Date.now() - startTime;
     result.errors = errors;
+    
+    // 保存上下文（用于多轮对话）
+    if (result.success) {
+      contextManager.addMessage(sessionId, 'assistant', result.summary || '查询完成', {
+        entities: result.entities,
+        sql: result.sql,
+        result: result.data,
+      });
+    }
     
     return result;
   }
