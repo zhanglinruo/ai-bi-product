@@ -1,0 +1,345 @@
+<template>
+  <div class="query-container">
+    <div class="header">
+      <h2>数据查询</h2>
+        <el-button @click="$router.push('/')">返回首页</el-button>
+    </div>
+
+    <el-card>
+      <div class="query-area">
+        <el-input
+          v-model="question"
+          type="textarea"
+          :rows="4"
+          placeholder="请输入你的问题..."
+        />
+        <div class="query-actions">
+          <el-select v-model="datasourceId" placeholder="选择数据源" clearable style="width: 200px">
+            <el-option v-for="ds in datasources" :key="ds.id" :label="ds.name" :value="ds.id" />
+          </el-select>
+          <el-button type="primary" :loading="loading" @click="handleQuery">查询</el-button>
+        </div>
+      </div>
+    </el-card>
+
+    <el-card v-if="loading || progressSteps.length > 0" class="progress-card">
+      <template #header>
+        <div class="progress-header">
+          <span>执行进度</span>
+          <el-tag :type="loading ? 'warning' : 'success'">{{ loading ? '执行中' : '已完成' }}</el-tag>
+        </div>
+      </template>
+      <div class="steps-container">
+        <div v-for="(step, index) in progressSteps" :key="index" class="step-item" :class="{ active: index === currentStepIndex, finished: step.status === 'finish' }">
+          <div class="step-dot">
+            <span v-if="step.status === 'finish'">✓</span>
+            <span v-else>{{ index + 1 }}</span>
+          </div>
+          <div class="step-content">
+            <div class="step-title">{{ step.title }}</div>
+            <div class="step-desc">{{ step.description }}</div>
+          </div>
+        </div>
+      </div>
+    </el-card>
+
+    <el-card v-if="result" class="result-card">
+      <template #header>
+        <div class="result-header">
+          <span>查询结果</span>
+          <div>
+            <el-button size="small" @click="handleExport">导出</el-button>
+            <el-button size="small" type="primary" @click="handleSave">保存</el-button>
+          </div>
+        </div>
+      </template>
+      <div v-if="result.type === 'analysis'" class="analysis-result">
+        <el-alert v-if="result.template" :title="'分析模板: ' + result.template" type="info" :closable="false" style="margin-bottom: 15px" />
+        <div v-for="(step, idx) in result.steps" :key="idx" class="step-result">
+          <div class="step-title">{{ idx + 1 }}. {{ step.step }}</div>
+          <div class="step-desc">{{ step.description }}</div>
+          <div v-if="step.summary" class="step-summary">{{ step.summary }}</div>
+          <el-table :data="step.data" style="width: 100%; margin-top: 10px" v-if="step.data && step.data.length > 0">
+            <el-table-column v-for="(value, key) in step.data[0]" :key="key" :prop="String(key)" :label="String(key)" width="180" />
+          </el-table>
+        </div>
+        <div v-if="result.finalReport" class="final-report">
+          <h4>分析报告</h4>
+          <div class="report-content">{{ result.finalReport }}</div>
+        </div>
+      </div>
+      <template v-else>
+        <div class="conclusion">{{ result.conclusion }}</div>
+        <div class="chart-wrapper" ref="chartRef"></div>
+        <el-table :data="result.result" style="width: 100%; margin-top: 20px" v-if="result.result && result.result.length > 0">
+          <el-table-column v-for="(value, key) in result.result[0]" :key="key" :prop="String(key)" :label="String(key)" />
+        </el-table>
+      </template>
+    </el-card>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, onMounted, nextTick } from 'vue';
+import { useRouter } from 'vue-router';
+import { datasourceApi, queryApi } from '../api';
+import * as echarts from 'echarts';
+import { ElMessage } from 'element-plus';
+
+interface ProgressStep {
+  title: string;
+  description: string;
+  status: 'wait' | 'process' | 'finish' | 'error';
+}
+
+const router = useRouter();
+const question = ref('');
+const datasourceId = ref('');
+const loading = ref(false);
+const result = ref<any>(null);
+const datasources = ref<any[]>([]);
+const chartRef = ref<HTMLElement>();
+const progressSteps = ref<ProgressStep[]>([]);
+const currentStepIndex = ref(0);
+
+const defaultSteps: ProgressStep[] = [
+  { title: '语义理解', description: '解析用户问题，匹配语义层', status: 'wait' },
+  { title: '模板匹配', description: '匹配分析模板或生成SQL', status: 'wait' },
+  { title: 'SQL执行', description: '执行数据库查询', status: 'wait' },
+  { title: '数据分析', description: '调用数据分析工具', status: 'wait' },
+  { title: '报告生成', description: '生成分析结论', status: 'wait' }
+];
+
+onMounted(async () => {
+  const res = await datasourceApi.getList();
+  if (res.data.success) {
+    datasources.value = res.data.data.filter((ds: any) => ds.status === 'active');
+  }
+});
+
+async function handleQuery() {
+  if (!question.value.trim()) return;
+  loading.value = true;
+  result.value = null;
+  progressSteps.value = JSON.parse(JSON.stringify(defaultSteps));
+  currentStepIndex.value = 0;
+  
+  try {
+    progressSteps.value[0].status = 'process';
+    const res = await queryApi.execute(question.value, datasourceId.value || undefined);
+    
+    if (res.data.success) {
+      progressSteps.value[0].status = 'finish';
+      progressSteps.value[1].status = 'finish';
+      progressSteps.value[2].status = 'finish';
+      progressSteps.value[3].status = 'finish';
+      progressSteps.value[4].status = 'finish';
+      currentStepIndex.value = 5;
+      
+      result.value = res.data.data;
+      await nextTick();
+      if (result.value.type !== 'analysis') {
+        setTimeout(() => renderChart(), 100);
+      }
+    }
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.message || e.message || '查询失败');
+    progressSteps.value.forEach((s, i) => {
+      if (s.status === 'process') s.status = 'error';
+    });
+  } finally {
+    loading.value = false;
+  }
+}
+
+function renderChart() {
+  if (!chartRef.value || !result.value?.result || result.value.result.length === 0) return;
+  
+  const chart = echarts.init(chartRef.value);
+  const data = result.value.result;
+  const chartType = result.value.chartType || 'bar';
+  
+  const keys = Object.keys(data[0]);
+  const xField = keys.find(k => ['name', 'province', 'city', 'hospital_name', 'manufacturer', 'corporate_group', 'product_name', 'generic_name'].includes(k.toLowerCase())) || keys[0];
+  const yField = keys.find(k => ['value', 'amount', 'quantity', 'total', 'sum', 'ratio'].includes(k.toLowerCase())) || keys[1];
+  
+  const xData = data.map((r: any) => r[xField]);
+  const yData = data.map((r: any) => parseFloat(r[yField]) || 0);
+  
+  let option: any = {
+    tooltip: { trigger: 'axis' },
+    xAxis: { type: 'category', data: xData },
+    yAxis: { type: 'value' }
+  };
+  
+  if (chartType === 'line') {
+    option.series = [{ type: 'line', data: yData, itemStyle: { color: '#67c23a' }, smooth: true }];
+  } else if (chartType === 'pie') {
+    option = {
+      tooltip: { trigger: 'item' },
+      series: [{
+        type: 'pie',
+        radius: '60%',
+        data: data.map((r: any, i: number) => ({ name: r[xField], value: parseFloat(r[yField]) || 0 })),
+        itemStyle: { color: (params: any) => ['#409eff', '#67c23a', '#e6a23c', '#f56c6c', '#909399', '#c71585', '#ff8c00'][params.dataIndex % 7] }
+      }]
+    };
+  } else {
+    option.series = [{ type: 'bar', data: yData, itemStyle: { color: '#409eff' } }];
+  }
+  
+  chart.setOption(option);
+}
+
+function handleExport() {
+  ElMessage.info('导出功能开发中');
+}
+
+function handleSave() {
+  ElMessage.info('保存功能开发中');
+}
+</script>
+
+<style scoped>
+.query-container {
+  padding: 20px;
+}
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+.query-area {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+.query-actions {
+  display: flex;
+  gap: 10px;
+}
+.progress-card {
+  margin-top: 20px;
+}
+.progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.steps-container {
+  padding: 10px 0;
+}
+.step-item {
+  display: flex;
+  align-items: flex-start;
+  margin-bottom: 20px;
+  opacity: 0.6;
+}
+.step-item.active {
+  opacity: 1;
+}
+.step-item.finished {
+  opacity: 1;
+}
+.step-dot {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #dcdfe6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: #fff;
+  margin-right: 12px;
+  flex-shrink: 0;
+}
+.step-item.active .step-dot {
+  background: #409eff;
+}
+.step-item.finished .step-dot {
+  background: #67c23a;
+}
+.step-content {
+  flex: 1;
+}
+.step-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 4px;
+}
+.step-item.active .step-title {
+  color: #409eff;
+}
+.step-desc {
+  font-size: 12px;
+  color: #909399;
+}
+.result-card {
+  margin-top: 20px;
+}
+.result-header {
+  display: flex;
+  justify-content: space-between;
+}
+.conclusion {
+  padding: 15px;
+  background: #f5f7fa;
+  border-radius: 4px;
+  margin-bottom: 20px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.chart-wrapper {
+  width: 100%;
+  height: 400px;
+}
+.analysis-result {
+  padding: 10px 0;
+}
+.step-result {
+  padding: 15px;
+  margin-bottom: 15px;
+  background: #fafafa;
+  border-radius: 4px;
+  border-left: 3px solid #409eff;
+}
+.step-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 8px;
+}
+.step-desc {
+  font-size: 13px;
+  color: #909399;
+  margin-bottom: 10px;
+}
+.step-summary {
+  padding: 10px;
+  background: #ecf5ff;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #409eff;
+  margin-bottom: 10px;
+}
+.final-report {
+  margin-top: 20px;
+  padding: 20px;
+  background: #f0f9ff;
+  border-radius: 4px;
+  border: 1px solid #91d5ff;
+}
+.final-report h4 {
+  margin: 0 0 15px 0;
+  color: #1890ff;
+}
+.report-content {
+  font-size: 14px;
+  line-height: 1.8;
+  color: #303133;
+  white-space: pre-wrap;
+}
+</style>
