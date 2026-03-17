@@ -5,13 +5,13 @@
  */
 
 import {
-  BaseAgent,
   AgentDefinition,
   AgentConfig,
   AgentContext,
   AgentResult,
   AgentError,
   AgentMetadata,
+  BaseAgent,
 } from './types';
 
 /**
@@ -49,7 +49,7 @@ export abstract class AbstractAgent<TInput = any, TOutput = any> implements Base
           if (cached) {
             return this.success(cached, { 
               executionTime: Date.now() - startTime,
-              metadata: { fromCache: true }
+              fromCache: true
             });
           }
         }
@@ -77,29 +77,7 @@ export abstract class AbstractAgent<TInput = any, TOutput = any> implements Base
         if (lastError.recoverable && retryCount <= (this.config.maxRetries || 0)) {
           console.log(`[${this.definition.name}] 第 ${retryCount} 次重试...`);
           await this.delay(1000 * retryCount); // 指数退避
-          
-          // 调用自定义重试逻辑
-          if (this.retry) {
-            try {
-              const retryResult = await this.retry(input, context, lastError);
-              if (retryResult.success) {
-                return retryResult;
-              }
-            } catch (retryError) {
-              // 重试失败，继续下一次
-            }
-          }
         }
-      }
-    }
-    
-    // 所有尝试都失败，尝试降级
-    if (this.fallback && lastError) {
-      console.log(`[${this.definition.name}] 执行失败，尝试降级处理...`);
-      try {
-        return await this.fallback(input, context);
-      } catch (fallbackError: any) {
-        // 降级也失败，返回原始错误
       }
     }
     

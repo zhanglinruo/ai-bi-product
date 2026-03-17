@@ -100,10 +100,17 @@ export class SemanticAgent extends RuleBasedAgent<{ entities: any; query: string
     
     // 1. 映射指标
     for (const metric of entities.metrics || []) {
-      const mapping = this.findMetricMapping(metric);
+      // metric 可能是字符串或对象 { field, table, aggregation }
+      const term = typeof metric === 'string' ? metric : (metric.field || metric);
+      if (typeof term !== 'string') {
+        unmappedTerms.push(JSON.stringify(metric));
+        continue;
+      }
+      
+      const mapping = this.findMetricMapping(term);
       if (mapping) {
         mappedFields.push({
-          userTerm: metric,
+          userTerm: term,
           dbField: mapping.dbField,
           dbTable: mapping.dbTable,
           fieldType: 'metric',
@@ -111,16 +118,23 @@ export class SemanticAgent extends RuleBasedAgent<{ entities: any; query: string
         });
         tables.add(mapping.dbTable);
       } else {
-        unmappedTerms.push(metric);
+        unmappedTerms.push(term);
       }
     }
     
     // 2. 映射维度
     for (const dimension of entities.dimensions || []) {
-      const mapping = this.findDimensionMapping(dimension);
+      // dimension 可能是字符串或对象 { field, table }
+      const term = typeof dimension === 'string' ? dimension : (dimension.field || dimension);
+      if (typeof term !== 'string') {
+        unmappedTerms.push(JSON.stringify(dimension));
+        continue;
+      }
+      
+      const mapping = this.findDimensionMapping(term);
       if (mapping) {
         mappedFields.push({
-          userTerm: dimension,
+          userTerm: term,
           dbField: mapping.dbField,
           dbTable: mapping.dbTable,
           fieldType: 'dimension',
@@ -128,7 +142,7 @@ export class SemanticAgent extends RuleBasedAgent<{ entities: any; query: string
         });
         tables.add(mapping.dbTable);
       } else {
-        unmappedTerms.push(dimension);
+        unmappedTerms.push(term);
       }
     }
     

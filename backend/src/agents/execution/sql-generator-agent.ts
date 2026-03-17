@@ -78,7 +78,7 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
     const { entities } = input;
     
     // 如果有 groupBy，生成 GROUP BY SQL
-    if (entities.groupBy?.length > 0) {
+    if (entities.groupBy && entities.groupBy.length > 0) {
       return this.generateGroupBySQL(entities);
     }
     

@@ -8,9 +8,9 @@ export interface ConversationContext {
   sessionId: string;
   userId: string;
   messages: ConversationMessage[];
-  entities: any;  // 上一次提取的实体
-  sql: string;    // 上一次执行的 SQL
-  result: any;    // 上一次的结果
+  entities?: any;  // 上一次提取的实体
+  sql?: string;    // 上一次执行的 SQL
+  result?: any;    // 上一次的结果
   createdAt: Date;
   updatedAt: Date;
 }
@@ -43,9 +43,6 @@ export class ContextManager {
         sessionId,
         userId,
         messages: [],
-        entities: null,
-        sql: null,
-        result: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       };

@@ -36,6 +36,7 @@ export interface AgentMetadata {
   modelUsed?: string;     // 使用的模型
   tokensUsed?: number;    // 消耗的 token
   retryCount?: number;    // 重试次数
+  fromCache?: boolean;    // 是否来自缓存
 }
 
 /**
@@ -88,6 +89,7 @@ export interface ExtractedEntities {
   aggregations?: string[]; // 聚合方式（sum, avg, count 等）
   limit?: number;          // 限制条数
   orderBy?: OrderBy;       // 排序
+  groupBy?: string[];      // 分组字段
 }
 
 export interface TimeRange {
@@ -171,6 +173,7 @@ export interface ValidationError {
   field?: string;
   message: string;
   severity: 'critical' | 'high' | 'medium';
+  details?: Record<string, any>;
 }
 
 export interface ValidationWarning {

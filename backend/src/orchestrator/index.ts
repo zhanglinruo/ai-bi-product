@@ -18,8 +18,9 @@ import {
   ExecutorOutput,
   InsightOutput,
   VisualizationOutput,
+  BaseAgent,
 } from '../agents/types';
-import { BaseAgent, LLMClient } from '../agents/base';
+import { LLMClient } from '../agents/base';
 import { NLUBAgent } from '../agents/understanding/nlu-agent';
 import { SemanticAgent } from '../agents/understanding/semantic-agent';
 import { ClarificationAgent } from '../agents/understanding/clarification-agent';
@@ -207,7 +208,16 @@ export class AgentOrchestrator {
       }, context);
       
       if (!validationResult.success || !validationResult.data!.isValid) {
-        errors.push(...(validationResult.data?.errors || []));
+        // 转换 ValidationError 为 AgentError
+        const validationErrors = validationResult.data?.errors || [];
+        for (const ve of validationErrors) {
+          errors.push({
+            code: ve.type.toUpperCase(),
+            message: ve.message,
+            recoverable: ve.severity !== 'critical',
+            details: ve.details,
+          });
+        }
         
         // 如果有修正后的 SQL，使用修正版本
         if (validationResult.data?.fixedSQL) {

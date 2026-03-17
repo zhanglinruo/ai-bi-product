@@ -135,9 +135,9 @@ export class NLUBAgent extends LLMAgent<NLUInput, NLUOutput> {
         dimensions: [],
         filters: {},
         groupBy: [],
-        orderBy: null,
+        orderBy: undefined,
         limit: 100,
-        timeRange: null,
+        timeRange: undefined,
       },
     };
     

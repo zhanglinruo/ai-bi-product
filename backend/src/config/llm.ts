@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { semanticConfig } from './semantic-layer';
 
 dotenv.config();
 
@@ -92,4 +93,36 @@ export const llmClient = new QianfanLLMClient();
 export async function callLLM(messages: Message[]): Promise<string> {
   const result = await llmClient.chat({ messages });
   return result.content;
+}
+
+/**
+ * 构建 Schema 提示词
+ */
+export function buildSchemaPrompt(): string {
+  const parts: string[] = [];
+  
+  // 添加指标定义
+  parts.push('## 可用指标');
+  for (const metric of semanticConfig.metrics) {
+    parts.push(`- ${metric.name} (${metric.aliases.join(', ')}): ${metric.aggregation}(${metric.dbTable}.${metric.dbField})`);
+  }
+  
+  // 添加维度定义
+  parts.push('\n## 可用维度');
+  for (const dim of semanticConfig.dimensions) {
+    let desc = `- ${dim.name} (${dim.aliases.join(', ')}): ${dim.dbTable}.${dim.dbField}`;
+    if (dim.values) {
+      const valueList = Object.entries(dim.values).map(([k, v]) => `${k}=${v}`).join(', ');
+      desc += ` [${valueList}]`;
+    }
+    parts.push(desc);
+  }
+  
+  // 添加业务术语
+  parts.push('\n## 业务术语');
+  for (const term of semanticConfig.terms) {
+    parts.push(`- ${term.term}: ${term.mappings.join(', ')}`);
+  }
+  
+  return parts.join('\n');
 }
