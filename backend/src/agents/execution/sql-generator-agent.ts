@@ -88,9 +88,11 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
   
   /**
    * 生成简单聚合 SQL
+   * 支持跨表筛选自动 JOIN
    */
   private generateSimpleSQL(entities: any): SQLGeneratorOutput {
     const metrics = entities.metrics || [];
+    const filters = entities.filters || {};
     
     if (metrics.length === 0) {
       return {
@@ -101,34 +103,124 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
     
     const metric = metrics[0];
     const agg = metric.aggregation || 'SUM';
-    const table = metric.table || FIELD_TABLE_MAPPING[metric.field] || 'orders';
+    const metricTable = metric.table || FIELD_TABLE_MAPPING[metric.field] || 'orders';
     const field = metric.field;
     const alias = agg.toLowerCase();
     
-    // 构建 SELECT
-    let sql = `SELECT ${agg}(\`${field}\`) AS \`${alias}\``;
-    
-    // 构建 FROM
-    sql += ` FROM \`${table}\``;
-    
-    // 构建 WHERE
-    const whereClauses = this.buildWhereClauses(entities, table);
-    if (whereClauses.length > 0) {
-      sql += ` WHERE ${whereClauses.join(' AND ')}`;
+    // 检查筛选条件是否涉及跨表
+    const filterTables = new Set<string>();
+    for (const filterField of Object.keys(filters)) {
+      const filterTable = FIELD_TABLE_MAPPING[filterField];
+      if (filterTable && filterTable !== metricTable) {
+        filterTables.add(filterTable);
+      }
     }
     
-    // 构建 ORDER BY
-    if (entities.orderBy) {
-      sql += ` ORDER BY \`${alias}\` ${entities.orderBy.direction}`;
+    // 需要跨表 JOIN
+    if (filterTables.size > 0) {
+      return this.generateCrossTableSQL(metric, entities, Array.from(filterTables));
+    }
+    
+    // 同表查询
+    let sql = `SELECT ${agg}(\`${field}\`) AS \`${alias}\``;
+    sql += ` FROM \`${metricTable}\``;
+    
+    // 构建 WHERE
+    const whereClauses: string[] = [];
+    
+    // 添加筛选条件
+    for (const [filterField, filterValue] of Object.entries(filters)) {
+      whereClauses.push(`\`${filterField}\` = '${filterValue}'`);
+    }
+    
+    // 添加时间条件
+    if (entities.timeRange) {
+      whereClauses.push(this.buildTimeCondition(entities.timeRange, ''));
+    }
+    
+    if (whereClauses.length > 0) {
+      sql += ` WHERE ${whereClauses.join(' AND ')}`;
     }
     
     // 构建 LIMIT
     sql += ` LIMIT ${entities.limit || 100}`;
     
-    return {
-      sql,
-      explanation: `查询 ${table} 表的 ${field} 字段的 ${agg} 值`,
-    };
+    let explanation = `查询 ${metricTable} 表的 ${field} 字段的 ${agg} 值`;
+    if (entities.timeRange) {
+      explanation += `，时间范围：${entities.timeRange.expression}`;
+    }
+    
+    return { sql, explanation };
+  }
+  
+  /**
+   * 生成跨表查询 SQL
+   */
+  private generateCrossTableSQL(
+    metric: { field: string; table?: string; aggregation?: string },
+    entities: any,
+    joinTables: string[]
+  ): SQLGeneratorOutput {
+    const agg = metric.aggregation || 'SUM';
+    const metricTable = metric.table || FIELD_TABLE_MAPPING[metric.field] || 'orders';
+    const field = metric.field;
+    const alias = agg.toLowerCase();
+    const filters = entities.filters || {};
+    
+    let sql = `SELECT ${agg}(o.\`${field}\`) AS \`${alias}\``;
+    let explanation = `跨表查询：`;
+    
+    // 构建 JOIN
+    const joins: string[] = [];
+    const whereClauses: string[] = [];
+    
+    for (const joinTable of joinTables) {
+      if (joinTable === 'customers') {
+        joins.push('JOIN `customers` c ON o.customer_id = c.customer_id');
+        explanation += '关联客户表';
+        
+        // 添加该表的筛选条件
+        for (const [filterField, filterValue] of Object.entries(filters)) {
+          if (FIELD_TABLE_MAPPING[filterField] === 'customers') {
+            whereClauses.push(`c.\`${filterField}\` = '${filterValue}'`);
+          }
+        }
+      } else if (joinTable === 'products') {
+        joins.push('JOIN `order_items` oi ON o.order_id = oi.order_id');
+        joins.push('JOIN `products` p ON oi.product_id = p.product_id');
+        explanation += '关联产品表';
+        
+        for (const [filterField, filterValue] of Object.entries(filters)) {
+          if (FIELD_TABLE_MAPPING[filterField] === 'products') {
+            whereClauses.push(`p.\`${filterField}\` = '${filterValue}'`);
+          }
+        }
+      }
+    }
+    
+    // 添加主表筛选条件
+    for (const [filterField, filterValue] of Object.entries(filters)) {
+      if (FIELD_TABLE_MAPPING[filterField] === metricTable || !FIELD_TABLE_MAPPING[filterField]) {
+        whereClauses.push(`o.\`${filterField}\` = '${filterValue}'`);
+      }
+    }
+    
+    // 时间范围（跨表查询也要添加时间条件）
+    if (entities.timeRange) {
+      whereClauses.push(this.buildTimeCondition(entities.timeRange, 'o'));
+      explanation += `，时间范围：${entities.timeRange.expression}`;
+    }
+    
+    // 组装 SQL
+    sql += ` FROM \`orders\` o ${joins.join(' ')}`;
+    
+    if (whereClauses.length > 0) {
+      sql += ` WHERE ${whereClauses.join(' AND ')}`;
+    }
+    
+    sql += ` LIMIT ${entities.limit || 100}`;
+    
+    return { sql, explanation };
   }
   
   /**
@@ -316,22 +408,51 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
    */
   private buildTimeCondition(timeRange: any, tablePrefix: string = ''): string {
     const prefix = tablePrefix ? `${tablePrefix}.` : '';
+    const dateField = `${prefix}order_date`;
     
+    // 年份
     if (timeRange.expression === 'year') {
-      return `YEAR(${prefix}order_date) = ${timeRange.year}`;
+      return `YEAR(${dateField}) = ${timeRange.year}`;
     }
     
+    // 月份
     if (timeRange.expression === 'month') {
-      return `MONTH(${prefix}order_date) = ${timeRange.month}`;
+      return `MONTH(${dateField}) = ${timeRange.month}`;
     }
     
     const { unit, value, operator } = timeRange;
-    const dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value} ${unit})`;
+    
+    // 根据时间单位构建条件
+    let dateFunc = '';
+    switch (unit.toUpperCase()) {
+      case 'DAY':
+        dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value} DAY)`;
+        break;
+      case 'WEEK':
+        dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value} WEEK)`;
+        break;
+      case 'MONTH':
+        dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value} MONTH)`;
+        break;
+      case 'QUARTER':
+        dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value * 3} MONTH)`;
+        break;
+      case 'YEAR':
+        dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value} YEAR)`;
+        break;
+      default:
+        dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value} DAY)`;
+    }
     
     if (operator === '=') {
-      return `DATE(${prefix}order_date) = ${dateFunc}`;
+      // 等于某个时间点
+      if (unit.toUpperCase() === 'DAY' && value === 0) {
+        return `DATE(${dateField}) = CURDATE()`;
+      }
+      return `DATE(${dateField}) = ${dateFunc}`;
     } else {
-      return `DATE(${prefix}order_date) >= ${dateFunc}`;
+      // 大于等于（最近N天/月/年）
+      return `DATE(${dateField}) >= ${dateFunc}`;
     }
   }
   
