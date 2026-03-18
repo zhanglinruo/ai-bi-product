@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  # 后端服务
+  backend:
+    build: ./backend
+    container_name: ai-bi-backend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_USER=root
+      - DB_PASSWORD=${DB_PASSWORD:-123456}
+      - DB_NAME=ai_bi_test
+      - JWT_SECRET=${JWT_SECRET:-your-secret-key}
+      - QIANFAN_API_KEY=${QIANFAN_API_KEY}
+      - QIANFAN_SECRET_KEY=${QIANFAN_SECRET_KEY}
+    depends_on:
+      - mysql
+    networks:
+      - ai-bi-network
+
+  # 前端服务
+  frontend:
+    build: ./frontend
+    container_name: ai-bi-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - ai-bi-network
+
+  # MySQL 数据库
+  mysql:
+    image: mysql:8.0
+    container_name: ai-bi-mysql
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=${DB_PASSWORD:-123456}
+      - MYSQL_DATABASE=ai_bi_test
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./backend/sql:/docker-entrypoint-initdb.d
+    networks:
+      - ai-bi-network
+
+  # Redis 缓存（可选）
+  redis:
+    image: redis:7-alpine
+    container_name: ai-bi-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - ai-bi-network
+
+networks:
+  ai-bi-network:
+    driver: bridge
+
+volumes:
+  mysql-data:
+  redis-data:
