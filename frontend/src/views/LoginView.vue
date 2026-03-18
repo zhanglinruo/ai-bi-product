@@ -18,7 +18,8 @@
         </el-form-item>
       </el-form>
       <div class="tips">
-        <p>默认管理员账号: admin / admin123</p>
+        <p>还没有账号？<router-link to="/register">立即注册</router-link></p>
+        <p style="margin-top: 8px;">默认管理员账号: admin / admin123</p>
       </div>
     </el-card>
   </div>
@@ -89,5 +90,14 @@ async function handleLogin() {
   text-align: center;
   color: #999;
   font-size: 12px;
+}
+
+.tips a {
+  color: #409eff;
+  text-decoration: none;
+}
+
+.tips a:hover {
+  text-decoration: underline;
 }
 </style>
