@@ -82,6 +82,47 @@ export class QianfanLLMClient {
       },
     };
   }
+
+  /**
+   * 调用 Embedding API
+   * 使用百度千帆 Embedding API
+   */
+  async embed(params: {
+    text: string | string[];
+    model?: string;
+  }): Promise<{ embedding: number[]; data?: Array<{ embedding: number[] }> }> {
+    // 百度千帆 Embedding API
+    const url = 'https://qianfan.baidubce.com/v2/embeddings';
+    
+    const texts = Array.isArray(params.text) ? params.text : [params.text];
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: params.model || 'embedding-v1',
+        input: texts,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Embedding调用失败: ${response.status} - ${error}`);
+    }
+
+    const data = await response.json() as any;
+    
+    // 返回第一个 embedding
+    const embedding = data.data?.[0]?.embedding || [];
+    
+    return {
+      embedding,
+      data: data.data,
+    };
+  }
 }
 
 // 默认客户端实例
