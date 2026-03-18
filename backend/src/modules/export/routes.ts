@@ -5,7 +5,7 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware } from '../../middleware/auth';
 
 const router = Router();
 

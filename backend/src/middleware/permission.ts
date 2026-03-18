@@ -165,8 +165,8 @@ export function requireDatasourcePermission(permission: 'read' | 'write' | 'admi
       return;
     }
     
-    const userPerm = permissions[0].permission;
-    const permLevel = { read: 1, write: 2, admin: 3 };
+    const userPerm = permissions[0].permission as 'read' | 'write' | 'admin';
+    const permLevel: Record<string, number> = { read: 1, write: 2, admin: 3 };
     
     if (permLevel[userPerm] < permLevel[permission]) {
       res.status(403).json({

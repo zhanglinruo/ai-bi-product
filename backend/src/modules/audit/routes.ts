@@ -3,9 +3,9 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { authMiddleware } from '../middleware/auth';
-import { requirePermission } from '../middleware/permission';
-import { getAuditLogs, getUserActivityStats, getSystemActivityOverview } from '../services/audit';
+import { authMiddleware } from '../../middleware/auth';
+import { requirePermission } from '../../middleware/permission';
+import { getAuditLogs, getUserActivityStats, getSystemActivityOverview } from '../../services/audit';
 
 const router = Router();
 
