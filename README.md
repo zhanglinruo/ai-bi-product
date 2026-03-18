@@ -12,13 +12,17 @@
 
 | 特性 | 说明 |
 |------|------|
-| 自然语言查询 | 用自然语言提问，无需写 SQL |
-| AI 智能理解 | AI 自动理解业务需求，生成查询语句 |
-| 语义层约束 | 基于语义层的字段口径约束，确保数据一致性 |
-| RAG 语义检索 | 向量 + 关键词混合检索，精准匹配语义内容 |
-| SQL 校验 | 字段白名单校验，杜绝越界查询 |
-| 自动数据分析 | AI 自动生成分析结论 |
-| 可视化展示 | 自动识别图表类型，动态渲染 |
+| 🗣️ 自然语言查询 | 用自然语言提问，无需写 SQL |
+| 🤖 AI 智能理解 | AI 自动理解业务需求，生成查询语句 |
+| 🔗 跨表 JOIN | 自动识别关联关系，生成跨表查询 |
+| ⏰ 时间智能 | 支持"最近7天"、"本季度"等时间表达式 |
+| 📊 自动可视化 | 自动识别图表类型，动态渲染 |
+| 📤 数据导出 | CSV / Excel 导出 |
+| 🌙 深色模式 | 支持深色/浅色主题切换 |
+| 📱 移动端适配 | 响应式设计，支持移动端访问 |
+| 🔐 权限体系 | 三级角色权限控制 |
+| 📝 审计日志 | 完整的操作审计追踪 |
+| 🔒 登录安全 | 失败锁定，防止暴力破解 |
 
 ### 技术栈
 
@@ -26,276 +30,255 @@
 |------|----------|
 | 后端 | Node.js + Express + TypeScript |
 | 前端 | Vue 3 + Vite + Element Plus + ECharts |
-| 数据库 | MySQL |
-| 大模型 | 本地部署 (OpenAI 兼容 API) |
-| 架构模式 | 工具化 + 语义层 + RAG (参考 OpenClaw) |
+| 数据库 | MySQL 8.0 |
+| 缓存 | Redis (可选) |
+| 大模型 | 百度千帆 / OpenAI 兼容 API |
+| 部署 | Docker + Nginx |
 
 ---
 
-## 二、功能现状
+## 二、快速开始
 
-### ✅ 已完成功能
-
-#### 1. 基础架构
-- [x] 项目初始化 (后端 + 前端)
-- [x] TypeScript 类型支持
-- [x] JWT 用户认证
-- [x] 工具标准化框架 (Tool Interface + Registry)
-
-#### 2. 语义层架构 (业界最佳实践)
-- [x] 语义层数据库表结构 (指标、术语、维度、规则、白名单)
-- [x] 语义检索服务 (Semantic Service)
-  - [x] 关键词匹配
-  - [x] 相似度计算
-  - [x] 业务域识别
-- [x] SQL 语义一致性校验 (字段白名单)
-- [x] 语义层 Prompt 约束
-
-#### 3. 核心功能
-- [x] 用户登录/登出
-- [x] 查询历史记录
-- [x] 数据源管理 (MVP 简化版)
-- [x] AI 查询执行 (语义匹配 → LLM → SQL → 校验 → 执行 → 结论)
-- [x] 查询重试机制 (最多3次)
-
-#### 4. 可视化
-- [x] ECharts 图表渲染
-- [x] 支持柱状图、折线图、饼图
-- [x] 自动识别图表类型
-
-#### 5. 数据库
-- [x] 用户表 (users)
-- [x] 数据源表 (datasources)
-- [x] 元数据表 (metadata)
-- [x] 会话表 (sessions)
-- [x] 查询历史表 (query_history)
-- [x] 语义层表 (semantic_metrics, semantic_terms, semantic_dimensions, semantic_rules, semantic_field_whitelist)
-
-### ⚠️ 待完善功能
-
-| 优先级 | 功能 | 说明 |
-|--------|------|------|
-| 高 | 向量嵌入 | 使用 Embedding 模型实现更精准的语义匹配 |
-| 高 | 多轮对话 | 支持追问，上下文记忆 |
-| 中 | 多数据源 | 支持更多数据库类型 |
-| 中 | 导出功能 | Excel/PDF 导出 |
-| 低 | 复杂图表 | 更多图表类型 |
-| 低 | 权限管理 | 细化到数据级别 |
-
-### 🚧 开发中功能
-
-- [ ] 节点编排框架
-
----
-
-## 三、系统使用
-
-### 启动服务
+### Docker 部署 (推荐)
 
 ```bash
-# 1. 启动后端 (端口 3000)
+# 克隆项目
+git clone https://github.com/zhanglinruo/ai-bi-product.git
+cd ai-bi-product
+
+# 配置环境变量
+cp .env.example .env
+
+# 启动服务
+docker-compose up -d
+
+# 访问
+# 前端: http://localhost
+# 后端: http://localhost:3000
+```
+
+### 本地开发
+
+```bash
+# 1. 安装依赖
+cd backend && npm install
+cd ../frontend && npm install
+
+# 2. 初始化数据库
 cd backend
-npm run dev
+npx ts-node scripts/init-db.ts
 
-# 2. 启动前端 (端口 5174)
-cd frontend
-npm run dev
+# 3. 启动服务
+# 后端 (终端 1)
+cd backend && npm run dev
+
+# 前端 (终端 2)
+cd frontend && npm run dev
 ```
 
-### 访问系统
-
-```
-前端地址: http://localhost:5174
-后端API: http://localhost:3000
-```
-
-### 登录信息
+### 默认账号
 
 | 账号 | 密码 | 角色 |
 |------|------|------|
 | admin | admin123 | 管理员 |
 
-### 测试查询示例
+---
 
-登录后可在查询页面输入以下问题测试：
+## 三、功能概览
 
-```
-安徽省采购金额最高的10家医院
-按企业集团统计采购占比
-2024年各月份采购趋势
-```
+### ✅ 已完成功能
+
+#### 用户系统
+- [x] 用户注册/登录
+- [x] JWT 认证
+- [x] 角色权限 (user/analyst/admin)
+- [x] 登录失败锁定
+
+#### 数据源管理
+- [x] 数据源 CRUD
+- [x] 连接测试
+- [x] 多数据库支持 (MySQL/PostgreSQL/ClickHouse)
+
+#### 查询功能
+- [x] 自然语言查询
+- [x] 跨表 JOIN 自动识别
+- [x] 时间智能 (最近N天/月/年)
+- [x] 查询历史
+- [x] 收藏查询
+
+#### 导出功能
+- [x] CSV 导出
+- [x] Excel 导出
+
+#### 可视化
+- [x] 自动图表类型识别
+- [x] 柱状图/折线图/饼图
+- [x] 数据洞察生成
+
+#### 前端体验
+- [x] 深色模式
+- [x] 响应式布局
+- [x] 移动端适配
+- [x] 查询建议
+- [x] 快捷指令
+
+#### 企业功能
+- [x] 权限控制
+- [x] 审计日志
+- [x] 字段权限表
+
+#### 部署
+- [x] Docker 支持
+- [x] Nginx 配置
 
 ---
 
-## 四、架构说明
+## 四、API 文档
+
+详见 [API.md](./API.md)
+
+### 主要接口
+
+| 模块 | 接口 | 说明 |
+|------|------|------|
+| 认证 | POST /api/users/login | 用户登录 |
+| 认证 | POST /api/users/register | 用户注册 |
+| 数据源 | GET /api/datasources | 获取数据源列表 |
+| 数据源 | POST /api/datasources/test | 测试连接 |
+| 查询 | POST /api/agent/query | 自然语言查询 |
+| 历史 | GET /api/history | 查询历史 |
+| 导出 | POST /api/export/excel | 导出 Excel |
+| 审计 | GET /api/audit | 审计日志 (admin) |
+
+---
+
+## 五、权限体系
+
+### 角色
+
+| 角色 | 权限范围 |
+|------|----------|
+| user | 基础查询、历史、CSV 导出 |
+| analyst | + 高级查询、Excel 导出、查看数据源 |
+| admin | 全部权限 + 用户管理 + 审计 |
+
+### 权限矩阵
+
+| 权限 | user | analyst | admin |
+|------|:----:|:-------:|:-----:|
+| query:execute | ✅ | ✅ | ✅ |
+| query:advanced | ❌ | ✅ | ✅ |
+| export:csv | ✅ | ✅ | ✅ |
+| export:excel | ❌ | ✅ | ✅ |
+| datasource:create | ❌ | ❌ | ✅ |
+| user:manage | ❌ | ❌ | ✅ |
+| audit:view | ❌ | ❌ | ✅ |
+
+---
+
+## 六、架构说明
+
+### Agent 架构 (3 层 8 个 Agent)
+
+```
+┌─────────────────────────────────────┐
+│  第 1 层：理解层                     │
+├─────────────────────────────────────┤
+│  NLU Agent → 语义理解，提取实体      │
+│  Semantic Agent → 术语映射          │
+│  Clarification Agent → 澄清问题     │
+└─────────────────────────────────────┘
+              ↓
+┌─────────────────────────────────────┐
+│  第 2 层：执行层                     │
+├─────────────────────────────────────┤
+│  SQL Generator → 生成 SQL           │
+│  Validator → 安全校验               │
+│  Executor → 执行查询                │
+└─────────────────────────────────────┘
+              ↓
+┌─────────────────────────────────────┐
+│  第 3 层：输出层                     │
+├─────────────────────────────────────┤
+│  Insight Agent → 生成洞察           │
+│  Visualization Agent → 图表推荐     │
+└─────────────────────────────────────┘
+```
 
 ### 目录结构
 
 ```
 backend/
 ├── src/
-│   ├── config/           # 配置文件
-│   │   ├── database.ts   # 数据库连接
-│   │   ├── llm.ts       # 大模型配置
-│   │   └── index.ts     # 配置导出
-│   ├── core/            # 核心框架
-│   │   ├── tool/        # 工具系统 (OpenClaw 风格)
-│   │   │   ├── types.ts      # 工具接口定义
-│   │   │   ├── registry.ts   # 工具注册中心
-│   │   │   ├── llm.ts        # LLM 工具
-│   │   │   └── sql.ts        # SQL 执行工具
-│   │   └── semantic/     # 语义层系统
-│   │       ├── service.ts    # 语义检索服务
-│   │       └── validator.ts # SQL 校验器
-│   ├── modules/          # 业务模块
-│   │   ├── user/         # 用户管理
-│   │   ├── datasource/   # 数据源管理
-│   │   ├── query/       # 查询执行
-│   │   ├── ai-engine/   # AI 引擎
-│   │   └── system/      # 系统配置
-│   └── index.ts          # 服务入口
-├── database/
-│   ├── init.sql          # 数据库初始化
-│   └── semantic.sql       # 语义层表结构
-├── scripts/              # 运维脚本
-│   ├── init-db.ts        # 初始化数据库
-│   └── init-semantic.ts  # 初始化语义层
-└── .env                  # 环境变量
-```
+│   ├── agents/           # Agent 系统
+│   │   ├── understanding/ # 理解层
+│   │   ├── execution/     # 执行层
+│   │   └── output/        # 输出层
+│   ├── middleware/        # 中间件
+│   │   ├── auth.ts        # 认证
+│   │   └── permission.ts  # 权限
+│   ├── modules/           # API 模块
+│   └── services/          # 服务
+├── scripts/               # 脚本
+└── Dockerfile
 
-### 语义层架构 (三层保障)
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  第一层：流程硬约束                                          │
-│  ├── 语义检索是必经前置环节                                   │
-│  ├── 无匹配 → 禁止生成，直接提示用户                          │
-│  └── 强制 Prompt 边界约束                                    │
-├─────────────────────────────────────────────────────────────┤
-│  第二层：RAG 语义检索                                        │
-│  ├── 关键词匹配 (语义层表)                                   │
-│  ├── 相似度计算                                              │
-│  ├── 业务域识别                                              │
-│  └── 精准内容投喂 (Top 5)                                    │
-├─────────────────────────────────────────────────────────────┤
-│  第三层：结果校验                                            │
-│  ├── SQL 字段白名单校验                                      │
-│  ├── 口径一致性校验                                          │
-│  └── 不合规 → 打回重生成 (最多3次)                           │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 查询流程
-
-```
-用户提问
-   ↓
-[语义层检索] ← 必经前置环节
-   ↓ (匹配成功)
-把匹配到的语义内容结构化投喂给 AI
-   ↓
-LLM 生成 SQL (带语义约束 Prompt)
-   ↓
-[SQL 校验] ← 字段白名单校验
-   ↓ (校验通过)
-SQL 执行
-   ↓
-LLM 生成结论
-   ↓
-返回结果 + 渲染图表
+frontend/
+├── src/
+│   ├── views/            # 页面
+│   ├── components/       # 组件
+│   ├── stores/           # 状态管理
+│   └── api/              # API 调用
+└── Dockerfile
 ```
 
 ---
 
-## 五、环境变量
-
-### 后端 (.env)
+## 七、环境变量
 
 ```bash
-# 服务配置
-NODE_ENV=development
+# 服务
 PORT=3000
+NODE_ENV=production
 
-# 数据库配置
-DB_HOST=
-DB_PORT=
-DB_USER=
-DB_PASSWORD=
-DB_NAME=
+# 数据库
+DB_HOST=mysql
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=your_password
+DB_NAME=ai_bi_test
 
-# JWT 配置
-JWT_SECRET=your-jwt-secret-key
+# JWT
+JWT_SECRET=your-secret-key
 JWT_EXPIRES_IN=24h
 
-# 大模型配置
-LLM_BASE_URL=https://xxx/v1
-LLM_API_KEY=sk-xxx
-LLM_MODEL=qwen3-235b-a22b
-LLM_TEMPERATURE=0.5
+# 大模型
+QIANFAN_API_KEY=your_api_key
+QIANFAN_SECRET_KEY=your_secret_key
 ```
 
 ---
 
-## 六、未来规划
+## 八、测试示例
 
-### 向量化语义检索 (RAG 进阶)
-
-```
-MVP 版本 (当前): 关键词匹配 + 相似度计算
-├── 优点: 轻量、无需额外模型
-└── 局限: 语义理解有限
-
-进阶版本: 向量嵌入
-├── Embedding 模型: bge-small-zh-v1.5 (开源) / OpenAI ada-002
-├── 向量库: Chroma (MVP) / Milvus (企业级)
-├── 混合检索: 向量 + 关键词 + 重排序
-└── 预期: 召回率从 60% 提升到 95%+
-```
-
-### 节点编排 (参考 OpenClaw)
+登录后在查询页面输入：
 
 ```
-问题解析节点 → 语义匹配节点 → SQL生成节点 → 校验节点 → 执行节点 → 结论生成节点 → 图表选择节点
+销售额是多少
+按客户类型统计销售额
+最近一个月的销售额
+零售客户的销售额
+销售排行前10
 ```
-
-每个节点可独立配置、重试、断点续跑。
 
 ---
 
-## 七、相关文档
+## 九、相关文档
 
-- [产品设计](./product-design.md)
-- [功能拆解清单](./功能拆解清单.md)
-- [技术选型方案](./技术选型方案.md)
-- [数据库设计](./数据库设计.md)
-
----
-
-## 八、常见问题
-
-### Q: 查询报 "未匹配到语义层定义"
-A: 检查问题是否使用了业务术语，如"采购金额"、"企业集团"等。可以在 semantic_* 表中添加对应定义。
-
-### Q: SQL 校验失败
-A: 检查生成的 SQL 是否使用了白名单外的字段。字段白名单存储在 semantic_field_whitelist 表中。
-
-### Q: 登录失败
-A: 运行 `npx ts-node scripts/reset-admin.ts` 重置密码
-
-### Q: 前端图表不显示
-A: 确保后端返回了 chartType 字段，前端会自动根据类型渲染
+- [API 文档](./API.md)
+- [开发计划](./DEVELOPMENT_PLAN.md)
+- [Agent 架构](./backend/AGENT_ARCHITECTURE.md)
 
 ---
 
-## 九、贡献指南
-
-1. Fork 本项目
-2. 创建功能分支 (`git checkout -b feature/xxx`)
-3. 提交更改 (`git commit -m 'Add xxx'`)
-4. 推送分支 (`git push origin feature/xxx`)
-5. 创建 Pull Request
-
----
-
-**版本**: v0.2.0 (语义层版)  
-**最后更新**: 2026-03-16
+**版本**: v1.0.0  
+**最后更新**: 2026-03-18
