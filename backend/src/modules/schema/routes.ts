@@ -22,8 +22,8 @@ router.post('/scan/:datasourceId', authMiddleware, async (req: Request, res: Res
     const [datasource] = await query<any>(`
       SELECT id, name, connection_config
       FROM datasources
-      WHERE id = ? AND user_id = ?
-    `, [datasourceId, (req as any).user?.id]);
+      WHERE id = ?
+    `, [datasourceId]);
     
     if (!datasource) {
       return res.status(404).json({
@@ -66,6 +66,42 @@ router.post('/scan/:datasourceId', authMiddleware, async (req: Request, res: Res
     res.status(500).json({
       success: false,
       message: error.message || '扫描失败',
+    });
+  }
+});
+
+/**
+ * 执行语义分析（调用 LLM）
+ */
+router.post('/analyze/:datasourceId', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const datasourceId = Array.isArray(req.params.datasourceId) 
+      ? req.params.datasourceId[0] 
+      : req.params.datasourceId;
+    
+    const scanService = getSchemaScanService();
+    
+    // 检查是否已扫描
+    const scanned = await scanService.isScanned(datasourceId);
+    if (!scanned) {
+      return res.status(400).json({
+        success: false,
+        message: '请先扫描数据源',
+      });
+    }
+    
+    // 执行语义分析
+    await scanService.analyzeSemantics(datasourceId);
+    
+    res.json({
+      success: true,
+      message: '语义分析完成',
+    });
+  } catch (error: any) {
+    console.error('[SchemaScan] 语义分析失败:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || '语义分析失败',
     });
   }
 });

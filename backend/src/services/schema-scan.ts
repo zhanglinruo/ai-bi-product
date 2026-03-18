@@ -6,6 +6,8 @@
 
 import { query } from '../config/database';
 import mysql from 'mysql2/promise';
+import { getLLMSemanticService, TableSemantic } from './llm-semantic';
+import { QianfanLLMClient } from '../config/llm';
 
 export interface TableSchema {
   tableName: string;
@@ -241,6 +243,89 @@ export class SchemaScanService {
     `, [datasourceId]);
 
     return result.count > 0;
+  }
+
+  /**
+   * 执行 LLM 语义分析
+   */
+  async analyzeSemantics(datasourceId: string): Promise<void> {
+    console.log(`[SchemaScan] 开始语义分析: ${datasourceId}`);
+
+    // 获取 LLM 客户端
+    const llmClient = new QianfanLLMClient({
+      baseUrl: process.env.LLM_BASE_URL || 'https://qianfan.baidubce.com/v2/coding',
+      apiKey: process.env.LLM_API_KEY || '',
+      model: process.env.LLM_MODEL || 'qianfan-code-latest',
+    });
+    
+    const semanticService = getLLMSemanticService(llmClient);
+
+    // 获取所有表
+    const tables = await this.getDatasourceSchema(datasourceId);
+    
+    if (tables.length === 0) {
+      console.log(`[SchemaScan] 没有找到表，请先扫描`);
+      return;
+    }
+
+    // 批量分析（每次 3 个表并发）
+    const tableSemantics = await semanticService.analyzeTables(
+      tables.map(t => ({
+        tableName: t.tableName,
+        tableComment: t.tableComment,
+        columns: t.columns.map(c => ({
+          columnName: c.columnName,
+          columnType: c.columnType,
+          columnComment: c.columnComment,
+        })),
+      })),
+      3
+    );
+
+    // 更新数据库
+    for (const tableSemantic of tableSemantics) {
+      await this.updateTableSemantic(datasourceId, tableSemantic);
+    }
+
+    console.log(`[SchemaScan] 语义分析完成: ${tableSemantics.length} 个表`);
+  }
+
+  /**
+   * 更新表的语义信息
+   */
+  private async updateTableSemantic(datasourceId: string, tableSemantic: TableSemantic): Promise<void> {
+    const { tableName, semanticName, semanticDescription, fields } = tableSemantic;
+
+    // 更新表语义
+    await query(`
+      UPDATE schema_tables
+      SET 
+        table_comment = ?,
+        updated_at = NOW()
+      WHERE datasource_id = ? AND table_name = ?
+    `, [semanticDescription || semanticName, datasourceId, tableName]);
+
+    // 更新字段语义
+    for (const field of fields) {
+      await query(`
+        UPDATE schema_columns
+        SET 
+          is_metric = ?,
+          is_dimension = ?,
+          semantic_name = ?,
+          semantic_description = ?,
+          updated_at = NOW()
+        WHERE datasource_id = ? AND table_name = ? AND column_name = ?
+      `, [
+        field.isMetric,
+        field.isDimension,
+        field.semanticName,
+        field.semanticDescription,
+        datasourceId,
+        tableName,
+        field.fieldName,
+      ]);
+    }
   }
 
   /**
