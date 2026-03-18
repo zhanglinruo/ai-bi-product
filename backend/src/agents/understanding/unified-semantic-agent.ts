@@ -69,7 +69,7 @@ const TIME_EXPRESSIONS: Record<string, { unit: string; value: number; operator: 
 
 // 时间分组表达式
 const GROUP_BY_PATTERNS = [
-  { pattern: /每月|按月|月度|月份/i, unit: 'month' },
+  { pattern: /每月|按月|月度|月份|到月/i, unit: 'month' },
   { pattern: /每天|按天|日度|日期/i, unit: 'day' },
   { pattern: /每周|按周|周度/i, unit: 'week' },
   { pattern: /每年|按年|年度/i, unit: 'year' },
