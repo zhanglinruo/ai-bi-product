@@ -234,32 +234,17 @@ function handleKeydown(e: KeyboardEvent) {
     result.value = null;
   }
 }
-const loading = ref(false);
-const result = ref<any>(null);
-const datasources = ref<any[]>([]);
-const chartRef = ref<HTMLElement>();
-const progressSteps = ref<ProgressStep[]>([]);
-const currentStepIndex = ref(0);
-const historyList = ref<HistoryItem[]>([]);
-const showHistory = ref(false);
 
-const defaultSteps: ProgressStep[] = [
-  { title: 'NLU 分析', description: '理解用户意图，提取关键实体', status: 'wait' },
-  { title: '语义匹配', description: '映射业务术语到数据库字段', status: 'wait' },
-  { title: 'SQL 生成', description: '生成符合规范的 SQL 查询', status: 'wait' },
-  { title: 'SQL 校验', description: '校验 SQL 安全性', status: 'wait' },
-  { title: '执行查询', description: '执行数据库查询', status: 'wait' },
-  { title: '洞察分析', description: '分析数据，生成洞察', status: 'wait' },
-  { title: '可视化', description: '生成图表配置', status: 'wait' }
-];
-
-onMounted(async () => {
-  const res = await datasourceApi.getList();
-  if (res.data.success) {
-    datasources.value = res.data.data.filter((ds: any) => ds.status === 'active');
+async function loadHistory() {
+  try {
+    const res = await historyApi.getList(10);
+    if (res.data.success) {
+      historyList.value = res.data.data;
+    }
+  } catch (e) {
+    console.error('加载历史失败', e);
   }
-  loadHistory();
-});
+}
 
 async function loadHistory() {
   try {
@@ -693,5 +678,121 @@ async function handleSave() {
   line-height: 1.8;
   color: #303133;
   white-space: pre-wrap;
+}
+
+/* 移动端响应式 */
+@media (max-width: 768px) {
+  .query-container {
+    padding: 12px;
+    padding-bottom: 80px;
+  }
+  
+  .header {
+    flex-direction: column;
+    gap: 12px;
+    text-align: center;
+  }
+  
+  .header h2 {
+    font-size: 20px;
+  }
+  
+  .query-actions {
+    flex-direction: column;
+  }
+  
+  .query-actions .el-select {
+    width: 100% !important;
+  }
+  
+  .query-actions .el-button {
+    width: 100%;
+  }
+  
+  .quick-commands {
+    justify-content: center;
+  }
+  
+  .suggestions {
+    justify-content: center;
+  }
+  
+  .progress-card {
+    margin-top: 12px;
+  }
+  
+  .steps-container {
+    padding: 8px 0;
+  }
+  
+  .step-item {
+    margin-bottom: 12px;
+  }
+  
+  .step-dot {
+    width: 24px;
+    height: 24px;
+    font-size: 10px;
+  }
+  
+  .step-title {
+    font-size: 13px;
+  }
+  
+  .step-desc {
+    font-size: 11px;
+  }
+  
+  .result-card {
+    margin-top: 12px;
+  }
+  
+  .result-header {
+    flex-direction: column;
+    gap: 12px;
+  }
+  
+  .result-header > div {
+    display: flex;
+    gap: 8px;
+  }
+  
+  .result-header .el-button {
+    flex: 1;
+  }
+  
+  .chart-wrapper {
+    height: 250px;
+  }
+  
+  .sql-code {
+    font-size: 12px;
+    padding: 10px;
+    overflow-x: auto;
+  }
+  
+  .conclusion {
+    padding: 12px;
+    font-size: 13px;
+  }
+}
+
+/* 小屏幕优化 */
+@media (max-width: 480px) {
+  .query-container {
+    padding: 8px;
+  }
+  
+  .header h2 {
+    font-size: 18px;
+  }
+  
+  .quick-commands {
+    gap: 6px;
+  }
+  
+  .command-tag {
+    font-size: 12px;
+  }
 }
 </style>
