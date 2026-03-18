@@ -194,12 +194,16 @@ export class NLUBAgent extends LLMAgent<NLUInput, NLUOutput> {
     
     const patterns = [
       { regex: /销售额?|销售金额|销售总额/, field: 'total_amount', table: 'orders', agg: 'SUM' },
-      { regex: /订单数|订单量|有多少订单/, field: 'order_id', table: 'orders', agg: 'COUNT' },
+      { regex: /订单数|订单量|有多少订单|订单.*数/, field: 'order_id', table: 'orders', agg: 'COUNT' },
       { regex: /客户数|客户总数|客户数量/, field: 'customer_id', table: 'customers', agg: 'COUNT' },
       { regex: /产品数|商品数/, field: 'product_id', table: 'products', agg: 'COUNT' },
+      { regex: /订单额|订单金额/, field: 'total_amount', table: 'orders', agg: 'SUM' },
+      { regex: /金额|总计|总额/, field: 'total_amount', table: 'orders', agg: 'SUM' },
       { regex: /平均.*订单|客单价|平均.*金额/, field: 'total_amount', table: 'orders', agg: 'AVG' },
       { regex: /最高|最大|最多的/, field: 'total_amount', table: 'orders', agg: 'MAX' },
       { regex: /最低|最小|最少的/, field: 'total_amount', table: 'orders', agg: 'MIN' },
+      { regex: /趋势|变化|统计|分析/, field: 'total_amount', table: 'orders', agg: 'SUM' },
+      { regex: /订单/, field: 'order_id', table: 'orders', agg: 'COUNT' },
     ];
     
     for (const p of patterns) {
