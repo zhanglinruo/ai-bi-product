@@ -2,6 +2,7 @@
  * 向量化 Semantic Agent
  * 
  * 使用向量嵌入进行语义匹配
+ * 支持动态配置加载
  */
 
 import { RuleBasedAgent } from '../base';
@@ -12,7 +13,7 @@ import {
   MappedField,
 } from '../types';
 import { getLocalEmbeddingService, LocalEmbeddingService } from '../../services/local-embedding';
-import { semanticConfig } from '../../config/semantic-layer';
+import { getSemanticMappingService, SemanticConfig } from '../../services/semantic-mapping';
 
 export interface VectorSemanticInput {
   entities: any;
@@ -23,7 +24,7 @@ export class VectorSemanticAgent extends RuleBasedAgent<VectorSemanticInput, Sem
   definition: AgentDefinition = {
     name: 'semantic-agent',
     description: '使用向量嵌入进行语义匹配',
-    version: '2.0.0',
+    version: '3.0.0',
     layer: 'understanding',
     inputSchema: {
       type: 'object',
@@ -46,6 +47,8 @@ export class VectorSemanticAgent extends RuleBasedAgent<VectorSemanticInput, Sem
   
   private embeddingService: LocalEmbeddingService;
   private initialized: boolean = false;
+  private lastConfigUpdate: Date | null = null;
+  private currentConfig: SemanticConfig | null = null;
   
   constructor() {
     super({ enableCache: true });
@@ -53,15 +56,28 @@ export class VectorSemanticAgent extends RuleBasedAgent<VectorSemanticInput, Sem
   }
   
   /**
-   * 初始化向量索引
+   * 初始化向量索引（从数据库动态加载）
    */
   async initialize(): Promise<void> {
-    if (this.initialized) return;
-    
     console.log('[Semantic Agent] 初始化向量索引...');
     
+    // 从数据库加载配置
+    const semanticMappingService = getSemanticMappingService();
+    const config = await semanticMappingService.getConfig();
+    
+    // 检查配置是否有更新
+    if (this.initialized && this.lastConfigUpdate) {
+      if (config.lastUpdated <= this.lastConfigUpdate) {
+        console.log('[Semantic Agent] 配置未更新，跳过重新索引');
+        return;
+      }
+    }
+    
+    // 清空旧索引
+    this.embeddingService.clearVectorStore();
+    
     // 索引指标
-    for (const metric of semanticConfig.metrics) {
+    for (const metric of config.metrics) {
       const texts = [metric.name, ...metric.aliases];
       for (let i = 0; i < texts.length; i++) {
         await this.embeddingService.addDocument(
@@ -80,7 +96,7 @@ export class VectorSemanticAgent extends RuleBasedAgent<VectorSemanticInput, Sem
     }
     
     // 索引维度
-    for (const dim of semanticConfig.dimensions) {
+    for (const dim of config.dimensions) {
       const texts = [dim.name, ...dim.aliases];
       for (let i = 0; i < texts.length; i++) {
         await this.embeddingService.addDocument(
@@ -99,7 +115,7 @@ export class VectorSemanticAgent extends RuleBasedAgent<VectorSemanticInput, Sem
     }
     
     // 索引术语
-    for (const term of semanticConfig.terms) {
+    for (const term of config.terms) {
       await this.embeddingService.addDocument(
         `term_${term.id}`,
         term.term,
@@ -114,6 +130,8 @@ export class VectorSemanticAgent extends RuleBasedAgent<VectorSemanticInput, Sem
     }
     
     this.initialized = true;
+    this.lastConfigUpdate = config.lastUpdated;
+    this.currentConfig = config;
     console.log(`[Semantic Agent] 向量索引初始化完成，共 ${this.embeddingService.getVectorStoreSize()} 个向量`);
   }
   
@@ -206,18 +224,7 @@ export class VectorSemanticAgent extends RuleBasedAgent<VectorSemanticInput, Sem
     }
     
     // 3. 映射筛选条件中的值
-    if (entities.filters) {
-      for (const [field, value] of Object.entries(entities.filters)) {
-        // 检查是否需要值映射
-        const dimConfig = semanticConfig.dimensions.find(d => d.dbField === field);
-        if (dimConfig?.values) {
-          const mappedValue = dimConfig.values[value as string];
-          if (mappedValue) {
-            entities.filters[field] = mappedValue;
-          }
-        }
-      }
-    }
+    // 注：值映射在 NLU Agent 中处理
     
     // 4. 生成 JOIN 提示
     const joinHints = this.generateJoinHints(Array.from(tables));
@@ -234,7 +241,8 @@ export class VectorSemanticAgent extends RuleBasedAgent<VectorSemanticInput, Sem
    * 精确匹配指标（快速路径）
    */
   private findMetricMapping(term: string): { dbField: string; dbTable: string } | null {
-    for (const metric of semanticConfig.metrics) {
+    if (!this.currentConfig) return null;
+    for (const metric of this.currentConfig.metrics) {
       if (metric.name === term || metric.aliases.includes(term)) {
         return {
           dbField: metric.dbField,
@@ -249,7 +257,8 @@ export class VectorSemanticAgent extends RuleBasedAgent<VectorSemanticInput, Sem
    * 精确匹配维度（快速路径）
    */
   private findDimensionMapping(term: string): { dbField: string; dbTable: string } | null {
-    for (const dim of semanticConfig.dimensions) {
+    if (!this.currentConfig) return null;
+    for (const dim of this.currentConfig.dimensions) {
       if (dim.name === term || dim.aliases.includes(term)) {
         return {
           dbField: dim.dbField,
