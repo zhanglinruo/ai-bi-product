@@ -94,7 +94,7 @@
 <script setup lang="ts">
 import { ref, onMounted, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
-import { datasourceApi, agentApi } from '../api';
+import { datasourceApi, agentApi, historyApi } from '../api';
 import * as echarts from 'echarts';
 import { ElMessage } from 'element-plus';
 
@@ -102,6 +102,17 @@ interface ProgressStep {
   title: string;
   description: string;
   status: 'wait' | 'process' | 'finish' | 'error';
+}
+
+interface HistoryItem {
+  id: string;
+  query_text: string;
+  sql: string;
+  result_summary: string;
+  row_count: number;
+  execution_time: number;
+  is_favorite: boolean;
+  created_at: string;
 }
 
 const router = useRouter();
@@ -113,6 +124,8 @@ const datasources = ref<any[]>([]);
 const chartRef = ref<HTMLElement>();
 const progressSteps = ref<ProgressStep[]>([]);
 const currentStepIndex = ref(0);
+const historyList = ref<HistoryItem[]>([]);
+const showHistory = ref(false);
 
 const defaultSteps: ProgressStep[] = [
   { title: 'NLU 分析', description: '理解用户意图，提取关键实体', status: 'wait' },
@@ -129,7 +142,24 @@ onMounted(async () => {
   if (res.data.success) {
     datasources.value = res.data.data.filter((ds: any) => ds.status === 'active');
   }
+  loadHistory();
 });
+
+async function loadHistory() {
+  try {
+    const res = await historyApi.getList(10);
+    if (res.data.success) {
+      historyList.value = res.data.data;
+    }
+  } catch (e) {
+    console.error('加载历史失败', e);
+  }
+}
+
+function useHistory(item: HistoryItem) {
+  question.value = item.query_text;
+  showHistory.value = false;
+}
 
 async function handleQuery() {
   if (!question.value.trim()) return;
@@ -137,6 +167,8 @@ async function handleQuery() {
   result.value = null;
   progressSteps.value = JSON.parse(JSON.stringify(defaultSteps));
   currentStepIndex.value = 0;
+  
+  const startTime = Date.now();
   
   try {
     // 使用 Agent API
@@ -164,10 +196,21 @@ async function handleQuery() {
         chartConfig: data.chartConfig,
       };
       
+      // 保存历史
+      await historyApi.save({
+        query_text: question.value,
+        sql: data.sql,
+        result_summary: data.summary,
+        row_count: data.rowCount || (data.data?.length || 0),
+        execution_time: Date.now() - startTime,
+      });
+      
       await nextTick();
       if (result.value.result && result.value.result.length > 0) {
         setTimeout(() => renderChart(), 100);
       }
+      
+      loadHistory();
     } else {
       // 处理错误
       const errorMsg = res.data.errors?.[0]?.message || '查询失败';
@@ -196,8 +239,8 @@ function renderChart() {
   const chartType = result.value.chartType || 'bar';
   
   const keys = Object.keys(data[0]);
-  const xField = keys.find(k => ['name', 'province', 'city', 'hospital_name', 'manufacturer', 'corporate_group', 'product_name', 'generic_name'].includes(k.toLowerCase())) || keys[0];
-  const yField = keys.find(k => ['value', 'amount', 'quantity', 'total', 'sum', 'ratio'].includes(k.toLowerCase())) || keys[1];
+  const xField = keys.find(k => ['name', 'province', 'city', 'hospital_name', 'manufacturer', 'corporate_group', 'product_name', 'generic_name', 'customer_type', 'category'].includes(k.toLowerCase())) || keys[0];
+  const yField = keys.find(k => ['value', 'amount', 'quantity', 'total', 'sum', 'ratio', 'sales'].includes(k.toLowerCase())) || keys[1];
   
   const xData = data.map((r: any) => r[xField]);
   const yData = data.map((r: any) => parseFloat(r[yField]) || 0);
@@ -228,11 +271,59 @@ function renderChart() {
 }
 
 function handleExport() {
-  ElMessage.info('导出功能开发中');
+  if (!result.value?.result || result.value.result.length === 0) {
+    ElMessage.warning('没有可导出的数据');
+    return;
+  }
+  
+  // 生成 CSV
+  const data = result.value.result;
+  const keys = Object.keys(data[0]);
+  
+  let csv = keys.join(',') + '\n';
+  data.forEach((row: any) => {
+    csv += keys.map(k => {
+      const val = row[k];
+      // 处理包含逗号的值
+      if (typeof val === 'string' && val.includes(',')) {
+        return `"${val}"`;
+      }
+      return val;
+    }).join(',') + '\n';
+  });
+  
+  // 下载
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `query_result_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  
+  ElMessage.success('导出成功');
 }
 
-function handleSave() {
-  ElMessage.info('保存功能开发中');
+async function handleSave() {
+  if (!result.value) {
+    ElMessage.warning('没有可保存的结果');
+    return;
+  }
+  
+  try {
+    await historyApi.save({
+      query_text: question.value,
+      sql: result.value.sql,
+      result_summary: result.value.conclusion,
+      row_count: result.value.result?.length || 0,
+      execution_time: 0,
+    });
+    
+    ElMessage.success('已保存到历史记录');
+    loadHistory();
+  } catch (e) {
+    ElMessage.error('保存失败');
+  }
 }
 </script>
 

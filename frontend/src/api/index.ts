@@ -64,6 +64,19 @@ export const agentApi = {
   getAgents: () => api.get('/agent/list'),
 };
 
+export const historyApi = {
+  // 获取历史列表
+  getList: (limit?: number, offset?: number) => api.get('/history', { params: { limit, offset } }),
+  // 保存历史
+  save: (data: any) => api.post('/history', data),
+  // 获取单条
+  getById: (id: string) => api.get(`/history/${id}`),
+  // 删除
+  delete: (id: string) => api.delete(`/history/${id}`),
+  // 切换收藏
+  toggleFavorite: (id: string) => api.put(`/history/${id}/favorite`),
+};
+
 export const systemApi = {
   getConfig: () => api.get('/system/config'),
   updateConfig: (config_key: string, config_value: string) => api.put('/system/config', { config_key, config_value }),
