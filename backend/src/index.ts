@@ -12,6 +12,7 @@ import systemRoutes from './modules/system/routes';
 import progressRoutes from './modules/progress/routes';
 import agentRoutes, { initOrchestrator } from './modules/agent/routes';
 import historyRoutes from './modules/history/routes';
+import exportRoutes from './modules/export/routes';
 import dbPool from './config/database';
 import { QianfanLLMClient } from './config/llm';
 import { semanticConfig } from './config/semantic-layer';
@@ -42,6 +43,7 @@ app.use('/api/system', systemRoutes);
 app.use('/api/progress', progressRoutes);
 app.use('/api/agent', agentRoutes);
 app.use('/api/history', historyRoutes);
+app.use('/api/export', exportRoutes);
 
 // 错误处理
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {

@@ -96,7 +96,7 @@ import { ref, onMounted, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import { datasourceApi, agentApi, historyApi } from '../api';
 import * as echarts from 'echarts';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 
 interface ProgressStep {
   title: string;
@@ -276,7 +276,23 @@ function handleExport() {
     return;
   }
   
-  // 生成 CSV
+  // 弹出选择框
+  ElMessageBox.confirm('请选择导出格式', '导出数据', {
+    distinguishCancelAndClose: true,
+    confirmButtonText: 'Excel',
+    cancelButtonText: 'CSV',
+  }).then(() => {
+    // Excel 导出
+    exportToExcel();
+  }).catch((action: string) => {
+    if (action === 'cancel') {
+      // CSV 导出
+      exportToCSV();
+    }
+  });
+}
+
+function exportToCSV() {
   const data = result.value.result;
   const keys = Object.keys(data[0]);
   
@@ -284,7 +300,6 @@ function handleExport() {
   data.forEach((row: any) => {
     csv += keys.map(k => {
       const val = row[k];
-      // 处理包含逗号的值
       if (typeof val === 'string' && val.includes(',')) {
         return `"${val}"`;
       }
@@ -292,16 +307,46 @@ function handleExport() {
     }).join(',') + '\n';
   });
   
-  // 下载
   const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
+  downloadBlob(blob, `query_result_${new Date().toISOString().slice(0, 10)}.csv`);
+  ElMessage.success('CSV 导出成功');
+}
+
+async function exportToExcel() {
+  try {
+    const data = result.value.result;
+    const response = await fetch('http://localhost:3000/api/export/excel', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('token')}`,
+      },
+      body: JSON.stringify({
+        data,
+        filename: `query_result_${new Date().toISOString().slice(0, 10)}`,
+        sheetName: '查询结果',
+      }),
+    });
+    
+    if (!response.ok) {
+      throw new Error('导出失败');
+    }
+    
+    const blob = await response.blob();
+    downloadBlob(blob, `query_result_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    ElMessage.success('Excel 导出成功');
+  } catch (e) {
+    ElMessage.error('Excel 导出失败');
+  }
+}
+
+function downloadBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `query_result_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
-  
-  ElMessage.success('导出成功');
 }
 
 async function handleSave() {
