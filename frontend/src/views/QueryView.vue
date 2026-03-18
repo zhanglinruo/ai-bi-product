@@ -2,7 +2,7 @@
   <div class="query-container">
     <div class="header">
       <h2>数据查询</h2>
-        <el-button @click="$router.push('/')">返回首页</el-button>
+      <el-button @click="$router.push('/')">返回首页</el-button>
     </div>
 
     <el-card>
@@ -11,16 +11,45 @@
           v-model="question"
           type="textarea"
           :rows="4"
-          placeholder="请输入你的问题..."
+          placeholder="请输入你的问题... (Ctrl+Enter 发送)"
+          @keydown.enter.ctrl="handleQuery"
         />
+        
+        <!-- 查询建议 -->
+        <div class="suggestions" v-if="showSuggestions && suggestions.length > 0">
+          <span class="suggestions-label">建议：</span>
+          <el-tag
+            v-for="sug in suggestions"
+            :key="sug"
+            class="suggestion-tag"
+            @click="question = sug; showSuggestions = false"
+          >
+            {{ sug }}
+          </el-tag>
+        </div>
+        
         <div class="query-actions">
           <el-select v-model="datasourceId" placeholder="选择数据源" clearable style="width: 200px">
             <el-option v-for="ds in datasources" :key="ds.id" :label="ds.name" :value="ds.id" />
           </el-select>
-          <el-button type="primary" :loading="loading" @click="handleQuery">查询</el-button>
+          <el-button type="primary" :loading="loading" @click="handleQuery">
+            查询 (Ctrl+Enter)
+          </el-button>
         </div>
       </div>
     </el-card>
+    
+    <!-- 快捷指令面板 -->
+    <div class="quick-commands">
+      <el-tag
+        v-for="cmd in quickCommands"
+        :key="cmd"
+        class="command-tag"
+        @click="question = cmd"
+      >
+        {{ cmd }}
+      </el-tag>
+    </div>
 
     <el-card v-if="loading || progressSteps.length > 0" class="progress-card">
       <template #header>
@@ -92,8 +121,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue';
-import { useRouter } from 'vue-router';
+import { ref, onMounted, nextTick, watch, onUnmounted } from 'vue';
+import { useRouter, useRoute } from 'vue-router';
 import { datasourceApi, agentApi, historyApi } from '../api';
 import * as echarts from 'echarts';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -116,8 +145,95 @@ interface HistoryItem {
 }
 
 const router = useRouter();
+const route = useRoute();
 const question = ref('');
 const datasourceId = ref('');
+const loading = ref(false);
+const result = ref<any>(null);
+const datasources = ref<any[]>([]);
+const chartRef = ref<HTMLElement>();
+const progressSteps = ref<ProgressStep[]>([]);
+const currentStepIndex = ref(0);
+const historyList = ref<HistoryItem[]>([]);
+const showHistory = ref(false);
+
+// 查询建议
+const showSuggestions = ref(false);
+const suggestions = ref<string[]>([]);
+
+// 快捷指令
+const quickCommands = [
+  '本月销售额',
+  '按地区统计订单量',
+  '最近一个月的销售趋势',
+  '客户类型分布',
+  '销售排行前10',
+  '同比增长分析',
+];
+
+const defaultSteps: ProgressStep[] = [
+  { title: 'NLU 分析', description: '理解用户意图，提取关键实体', status: 'wait' },
+  { title: '语义匹配', description: '映射业务术语到数据库字段', status: 'wait' },
+  { title: 'SQL 生成', description: '生成符合规范的 SQL 查询', status: 'wait' },
+  { title: 'SQL 校验', description: '校验 SQL 安全性', status: 'wait' },
+  { title: '执行查询', description: '执行数据库查询', status: 'wait' },
+  { title: '洞察分析', description: '分析数据，生成洞察', status: 'wait' },
+  { title: '可视化', description: '生成图表配置', status: 'wait' }
+];
+
+onMounted(async () => {
+  const res = await datasourceApi.getList();
+  if (res.data.success) {
+    datasources.value = res.data.data.filter((ds: any) => ds.status === 'active');
+  }
+  loadHistory();
+  
+  // 从 URL 参数获取查询
+  if (route.query.q) {
+    question.value = route.query.q as string;
+    handleQuery();
+  }
+  
+  // 键盘快捷键
+  document.addEventListener('keydown', handleKeydown);
+});
+
+onUnmounted(() => {
+  document.removeEventListener('keydown', handleKeydown);
+});
+
+// 监听输入变化，显示建议
+watch(question, (val) => {
+  if (val.length > 0 && val.length < 10) {
+    showSuggestions.value = true;
+    // 简单的建议逻辑
+    const keywords = ['销售', '订单', '客户', '产品', '地区', '时间'];
+    const matched = keywords.filter(k => val.includes(k));
+    if (matched.length > 0) {
+      suggestions.value = [
+        `${matched[0]}额统计`,
+        `按${matched[0]}分类`,
+        `${matched[0]}趋势分析`,
+      ];
+    } else {
+      suggestions.value = ['销售额统计', '订单量排名', '客户分布'];
+    }
+  } else {
+    showSuggestions.value = false;
+  }
+});
+
+function handleKeydown(e: KeyboardEvent) {
+  // Ctrl+Enter 发送
+  if (e.ctrlKey && e.key === 'Enter') {
+    handleQuery();
+  }
+  // Escape 清空
+  if (e.key === 'Escape') {
+    question.value = '';
+    result.value = null;
+  }
+}
 const loading = ref(false);
 const result = ref<any>(null);
 const datasources = ref<any[]>([]);
@@ -391,6 +507,43 @@ async function handleSave() {
   display: flex;
   gap: 10px;
 }
+
+/* 查询建议 */
+.suggestions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.suggestions-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.suggestion-tag {
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.suggestion-tag:hover {
+  background-color: var(--primary-color);
+  color: white;
+}
+
+/* 快捷指令 */
+.quick-commands {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+}
+.command-tag {
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.command-tag:hover {
+  background-color: var(--primary-color);
+  color: white;
+}
+
 .progress-card {
   margin-top: 20px;
 }
