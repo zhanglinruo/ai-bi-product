@@ -30,22 +30,6 @@ import { InsightAgent } from '../agents/output/insight-agent';
 import { VisualizationAgent } from '../agents/output/visualization-agent';
 import { contextManager, ContextManager } from '../utils/context-manager';
 
-// 字段所属表映射
-const FIELD_TABLE_MAPPING: Record<string, string> = {
-  'total_amount': 'orders',
-  'order_id': 'orders',
-  'customer_id': 'customers',
-  'product_id': 'products',
-  'customer_type': 'customers',
-  'category': 'products',
-  'city': 'customers',
-  'country': 'customers',
-  'order_status': 'orders',
-  'payment_method': 'orders',
-  'account_status': 'customers',
-  'manufacturer': 'products',
-};
-
 /**
  * 完整的查询结果
  */
@@ -166,21 +150,15 @@ export class AgentOrchestrator {
       contextManager.addMessage(sessionId, 'user', query);
       
       // 1.2 构建 mappedFields（基于 NLU 结果）
-      // 由于 UnifiedSemanticAgent 已经完成了语义映射，直接构建 mappedFields
+      // UnifiedSemanticAgent 已经返回了完整的实体信息，直接使用
       const mappedFields: any[] = [];
       const tables = new Set<string>();
       
       // 构建 SQL Generator 需要的 entities 格式
+      // 已经是完整格式，包含表名和聚合方式
       const sqlEntities = {
-        metrics: (result.entities.metrics || []).map((m: string) => ({
-          field: m,
-          table: FIELD_TABLE_MAPPING[m] || 'orders',
-          aggregation: 'SUM',
-        })),
-        dimensions: (result.entities.dimensions || []).map((d: string) => ({
-          field: d,
-          table: FIELD_TABLE_MAPPING[d] || 'orders',
-        })),
+        metrics: result.entities.metrics || [],
+        dimensions: result.entities.dimensions || [],
         filters: result.entities.filters || {},
         groupBy: result.entities.groupBy || [],
         orderBy: result.entities.orderBy,
@@ -188,29 +166,27 @@ export class AgentOrchestrator {
         timeRange: result.entities.timeRange,
       };
       
-      // 映射指标
+      // 构建 mappedFields（用于可视化提示等）
       for (const metric of result.entities.metrics || []) {
         mappedFields.push({
-          userTerm: metric,
-          dbField: metric,
-          dbTable: FIELD_TABLE_MAPPING[metric] || 'orders',
+          userTerm: metric.field,
+          dbField: metric.field,
+          dbTable: metric.table,
           fieldType: 'metric',
-          confidence: 0.95,
+          confidence: metric.confidence || 0.9,
         });
-        tables.add(FIELD_TABLE_MAPPING[metric] || 'orders');
+        tables.add(metric.table);
       }
       
-      // 映射维度
       for (const dim of result.entities.dimensions || []) {
-        const table = FIELD_TABLE_MAPPING[dim] || 'orders';
         mappedFields.push({
-          userTerm: dim,
-          dbField: dim,
-          dbTable: table,
+          userTerm: dim.field,
+          dbField: dim.field,
+          dbTable: dim.table,
           fieldType: 'dimension',
-          confidence: 0.95,
+          confidence: dim.confidence || 0.9,
         });
-        tables.add(table);
+        tables.add(dim.table);
       }
       
       const semanticResult = {
@@ -222,9 +198,6 @@ export class AgentOrchestrator {
           unmappedTerms: [],
         },
       };
-      
-      // 更新 result.entities 为 SQL Generator 格式
-      result.entities = sqlEntities;
       
       // 1.3 Clarification Agent（如果需要）
       if (nluResult.data!.confidence < 0.7 || 

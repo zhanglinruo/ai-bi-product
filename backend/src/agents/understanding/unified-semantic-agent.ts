@@ -161,9 +161,20 @@ export class UnifiedSemanticAgent extends LLMAgent<UnifiedNLUInput, NLUOutput> {
       }
     }
     
-    const finalEntities = {
-      metrics: entities.metrics.map((m: any) => m.field),
-      dimensions: entities.dimensions.map((d: any) => d.field),
+    // 返回完整的实体信息（包含表名、聚合方式等）
+    // 注意：这里返回的对象数组格式，与 ExtractedEntities 类型不同
+    const finalEntities: any = {
+      metrics: entities.metrics.map((m: any) => ({
+        field: m.field,
+        table: m.table,
+        aggregation: m.aggregation,
+        confidence: m.confidence,
+      })),
+      dimensions: entities.dimensions.map((d: any) => ({
+        field: d.field,
+        table: d.table,
+        confidence: d.confidence,
+      })),
       filters: entities.filters,
       groupBy: finalGroupBy,
       orderBy: entities.orderBy ? {

@@ -27,7 +27,7 @@ export interface SQLGeneratorInput {
   mappedFields?: any[];
 }
 
-// 字段所属表映射
+// 字段所属表映射（后备使用，优先使用输入中的 table 字段）
 const FIELD_TABLE_MAPPING: Record<string, string> = {
   'total_amount': 'orders',
   'order_id': 'orders',
