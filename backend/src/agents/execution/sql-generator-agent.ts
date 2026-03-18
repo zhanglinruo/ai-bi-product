@@ -27,20 +27,31 @@ export interface SQLGeneratorInput {
   mappedFields?: any[];
 }
 
-// 字段所属表映射
+// 字段所属表映射 - 医疗产品采购数据
+const DEFAULT_TABLE = 't_ai_medical_product_records';
+
 const FIELD_TABLE_MAPPING: Record<string, string> = {
-  'total_amount': 'orders',
-  'order_id': 'orders',
-  'customer_id': 'customers',
-  'product_id': 'products',
-  'customer_type': 'customers',
-  'category': 'products',
-  'city': 'customers',
-  'country': 'customers',
-  'order_status': 'orders',
-  'payment_method': 'orders',
-  'account_status': 'customers',
-  'manufacturer': 'products',
+  'amount': DEFAULT_TABLE,
+  'quantity': DEFAULT_TABLE,
+  'price': DEFAULT_TABLE,
+  'id': DEFAULT_TABLE,
+  'hospital_code': DEFAULT_TABLE,
+  'hospital_name': DEFAULT_TABLE,
+  'province': DEFAULT_TABLE,
+  'city': DEFAULT_TABLE,
+  'county': DEFAULT_TABLE,
+  'product_name': DEFAULT_TABLE,
+  'generic_name': DEFAULT_TABLE,
+  'brand_name': DEFAULT_TABLE,
+  'manufacturer': DEFAULT_TABLE,
+  'corporate_group': DEFAULT_TABLE,
+  'category': DEFAULT_TABLE,
+  'record_date': DEFAULT_TABLE,
+  'dosage_form': DEFAULT_TABLE,
+  'specifications': DEFAULT_TABLE,
+  'hospital_level': DEFAULT_TABLE,
+  'total_amount': DEFAULT_TABLE,
+  'order_id': DEFAULT_TABLE,
 };
 
 export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorOutput> {
@@ -103,7 +114,7 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
     
     const metric = metrics[0];
     const agg = metric.aggregation || 'SUM';
-    const metricTable = metric.table || FIELD_TABLE_MAPPING[metric.field] || 'orders';
+    const metricTable = metric.table || FIELD_TABLE_MAPPING[metric.field] || DEFAULT_TABLE;
     const field = metric.field;
     const alias = agg.toLowerCase();
     
@@ -162,7 +173,7 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
     joinTables: string[]
   ): SQLGeneratorOutput {
     const agg = metric.aggregation || 'SUM';
-    const metricTable = metric.table || FIELD_TABLE_MAPPING[metric.field] || 'orders';
+    const metricTable = metric.table || FIELD_TABLE_MAPPING[metric.field] || DEFAULT_TABLE;
     const field = metric.field;
     const alias = agg.toLowerCase();
     const filters = entities.filters || {};
@@ -212,7 +223,7 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
     }
     
     // 组装 SQL
-    sql += ` FROM \`orders\` o ${joins.join(' ')}`;
+    sql += ` FROM \`${metricTable}\` ${metricTable.charAt(0)} ${joins.join(' ')}`;
     
     if (whereClauses.length > 0) {
       sql += ` WHERE ${whereClauses.join(' AND ')}`;
@@ -237,11 +248,11 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
     
     const metric = metrics[0];
     const metricField = metric.field;
-    const metricTable = metric.table || FIELD_TABLE_MAPPING[metricField] || 'orders';
+    const metricTable = metric.table || FIELD_TABLE_MAPPING[metricField] || DEFAULT_TABLE;
     const metricAgg = metric.aggregation || 'SUM';
     
     const groupField = groupBy[0];
-    const groupTable = FIELD_TABLE_MAPPING[groupField] || 'orders';
+    const groupTable = FIELD_TABLE_MAPPING[groupField] || DEFAULT_TABLE;
     
     let sql = '';
     let explanation = '';
@@ -314,55 +325,16 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
   ): string {
     let sql = '';
     
-    if (metricTable === 'orders' && groupTable === 'customers') {
-      sql = `SELECT c.\`${groupField}\`, ${metricAgg}(o.\`${metricField}\`) AS \`total\` FROM \`orders\` o JOIN \`customers\` c ON o.customer_id = c.customer_id`;
-      
-      // WHERE 条件
-      const whereClauses: string[] = [];
-      for (const [field, value] of Object.entries(filters)) {
-        if (field === groupField) {
-          whereClauses.push(`c.\`${field}\` = '${value}'`);
-        } else if (FIELD_TABLE_MAPPING[field] === 'customers') {
-          whereClauses.push(`c.\`${field}\` = '${value}'`);
-        } else {
-          whereClauses.push(`o.\`${field}\` = '${value}'`);
-        }
-      }
-      
-      if (entities.timeRange) {
-        whereClauses.push(this.buildTimeCondition(entities.timeRange, 'o'));
-      }
-      
-      if (whereClauses.length > 0) {
-        sql += ` WHERE ${whereClauses.join(' AND ')}`;
-      }
-      
-      sql += ` GROUP BY c.\`${groupField}\``;
-      
-    } else if (metricTable === 'orders' && groupTable === 'products') {
-      sql = `SELECT p.\`${groupField}\`, SUM(oi.total) AS \`total\` FROM \`order_items\` oi JOIN \`products\` p ON oi.product_id = p.product_id`;
-      
-      // WHERE 条件
-      const whereClauses: string[] = [];
-      for (const [field, value] of Object.entries(filters)) {
-        if (field === groupField) {
-          whereClauses.push(`p.\`${field}\` = '${value}'`);
-        }
-      }
-      
-      if (whereClauses.length > 0) {
-        sql += ` WHERE ${whereClauses.join(' AND ')}`;
-      }
-      
-      sql += ` GROUP BY p.\`${groupField}\``;
-      
-    } else if (groupTable === 'customers') {
-      // 客户统计
-      sql = `SELECT \`${groupField}\`, COUNT(*) AS \`count\` FROM \`customers\``;
+    if (metricTable === DEFAULT_TABLE && groupTable === DEFAULT_TABLE) {
+      sql = `SELECT \`${groupField}\`, ${metricAgg}(\`${metricField}\`) AS \`total\` FROM \`${metricTable}\``;
       
       const whereClauses: string[] = [];
       for (const [field, value] of Object.entries(filters)) {
         whereClauses.push(`\`${field}\` = '${value}'`);
+      }
+      
+      if (entities.timeRange) {
+        whereClauses.push(this.buildTimeCondition(entities.timeRange, ''));
       }
       
       if (whereClauses.length > 0) {
@@ -370,8 +342,8 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
       }
       
       sql += ` GROUP BY \`${groupField}\``;
+      
     } else {
-      // 默认：简单 GROUP BY
       sql = `SELECT \`${groupField}\`, ${metricAgg}(\`${metricField}\`) AS \`total\` FROM \`${metricTable}\` GROUP BY \`${groupField}\``;
     }
     

@@ -246,17 +246,6 @@ async function loadHistory() {
   }
 }
 
-async function loadHistory() {
-  try {
-    const res = await historyApi.getList(10);
-    if (res.data.success) {
-      historyList.value = res.data.data;
-    }
-  } catch (e) {
-    console.error('加载历史失败', e);
-  }
-}
-
 function useHistory(item: HistoryItem) {
   question.value = item.query_text;
   showHistory.value = false;
