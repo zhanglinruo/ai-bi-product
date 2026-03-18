@@ -112,7 +112,10 @@ export class ExecutorAgent extends RuleBasedAgent<ExecutorInput, ExecutorOutput>
       setTimeout(() => reject(new Error('查询超时')), timeout);
     });
     
-    return Promise.race([queryPromise, timeoutPromise]);
+    // mysql2 返回 [rows, fields]，我们只需要 rows
+    const result = await Promise.race([queryPromise, timeoutPromise]);
+    const [rows] = result;
+    return { rows };
   }
   
   /**
