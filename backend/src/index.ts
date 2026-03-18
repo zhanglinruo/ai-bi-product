@@ -15,6 +15,7 @@ import historyRoutes from './modules/history/routes';
 import exportRoutes from './modules/export/routes';
 import auditRoutes from './modules/audit/routes';
 import semanticRoutes from './modules/semantic/routes';
+import schemaRoutes from './modules/schema/routes';
 import dbPool from './config/database';
 import { QianfanLLMClient } from './config/llm';
 import { semanticConfig } from './config/semantic-layer';
@@ -48,6 +49,7 @@ app.use('/api/history', historyRoutes);
 app.use('/api/export', exportRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/semantic', semanticRoutes);
+app.use('/api/schema', schemaRoutes);
 
 // 错误处理
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
