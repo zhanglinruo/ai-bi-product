@@ -21,9 +21,7 @@ import {
   BaseAgent,
 } from '../agents/types';
 import { LLMClient } from '../agents/base';
-import { NLUBAgent } from '../agents/understanding/nlu-agent';
-import { SemanticAgent } from '../agents/understanding/semantic-agent';
-import { VectorSemanticAgent } from '../agents/understanding/vector-semantic-agent';
+import { UnifiedSemanticAgent } from '../agents/understanding/unified-semantic-agent';
 import { ClarificationAgent } from '../agents/understanding/clarification-agent';
 import { SQLGeneratorAgent } from '../agents/execution/sql-generator-agent';
 import { ValidatorAgent } from '../agents/execution/validator-agent';
@@ -31,6 +29,22 @@ import { ExecutorAgent } from '../agents/execution/executor-agent';
 import { InsightAgent } from '../agents/output/insight-agent';
 import { VisualizationAgent } from '../agents/output/visualization-agent';
 import { contextManager, ContextManager } from '../utils/context-manager';
+
+// 字段所属表映射
+const FIELD_TABLE_MAPPING: Record<string, string> = {
+  'total_amount': 'orders',
+  'order_id': 'orders',
+  'customer_id': 'customers',
+  'product_id': 'products',
+  'customer_type': 'customers',
+  'category': 'products',
+  'city': 'customers',
+  'country': 'customers',
+  'order_status': 'orders',
+  'payment_method': 'orders',
+  'account_status': 'customers',
+  'manufacturer': 'products',
+};
 
 /**
  * 完整的查询结果
@@ -151,16 +165,66 @@ export class AgentOrchestrator {
       // 添加用户消息
       contextManager.addMessage(sessionId, 'user', query);
       
-      // 1.2 Semantic Agent
-      if (this.config.debug) console.log('[Orchestrator] 执行 Semantic Agent...');
-      const semanticResult = await this.executeAgent<SemanticOutput>('semantic-agent', {
-        entities: result.entities,
-        query,
-      }, context);
+      // 1.2 构建 mappedFields（基于 NLU 结果）
+      // 由于 UnifiedSemanticAgent 已经完成了语义映射，直接构建 mappedFields
+      const mappedFields: any[] = [];
+      const tables = new Set<string>();
       
-      if (!semanticResult.success) {
-        errors.push(semanticResult.error!);
+      // 构建 SQL Generator 需要的 entities 格式
+      const sqlEntities = {
+        metrics: (result.entities.metrics || []).map((m: string) => ({
+          field: m,
+          table: FIELD_TABLE_MAPPING[m] || 'orders',
+          aggregation: 'SUM',
+        })),
+        dimensions: (result.entities.dimensions || []).map((d: string) => ({
+          field: d,
+          table: FIELD_TABLE_MAPPING[d] || 'orders',
+        })),
+        filters: result.entities.filters || {},
+        groupBy: result.entities.groupBy || [],
+        orderBy: result.entities.orderBy,
+        limit: result.entities.limit || 100,
+        timeRange: result.entities.timeRange,
+      };
+      
+      // 映射指标
+      for (const metric of result.entities.metrics || []) {
+        mappedFields.push({
+          userTerm: metric,
+          dbField: metric,
+          dbTable: FIELD_TABLE_MAPPING[metric] || 'orders',
+          fieldType: 'metric',
+          confidence: 0.95,
+        });
+        tables.add(FIELD_TABLE_MAPPING[metric] || 'orders');
       }
+      
+      // 映射维度
+      for (const dim of result.entities.dimensions || []) {
+        const table = FIELD_TABLE_MAPPING[dim] || 'orders';
+        mappedFields.push({
+          userTerm: dim,
+          dbField: dim,
+          dbTable: table,
+          fieldType: 'dimension',
+          confidence: 0.95,
+        });
+        tables.add(table);
+      }
+      
+      const semanticResult = {
+        success: true,
+        data: {
+          mappedFields,
+          availableTables: Array.from(tables),
+          joinHints: [],
+          unmappedTerms: [],
+        },
+      };
+      
+      // 更新 result.entities 为 SQL Generator 格式
+      result.entities = sqlEntities;
       
       // 1.3 Clarification Agent（如果需要）
       if (nluResult.data!.confidence < 0.7 || 
@@ -411,15 +475,12 @@ export function createOrchestrator(
 ): AgentOrchestrator {
   const orchestrator = new AgentOrchestrator(config);
   
-  // 选择 Semantic Agent（规则匹配 or 向量嵌入）
-  const useVectorSearch = process.env.USE_VECTOR_SEARCH === 'true';
-  const semanticAgent = useVectorSearch 
-    ? new VectorSemanticAgent() 
-    : new SemanticAgent(semanticConfig);
+  // 使用统一的语义理解 Agent（向量 + 规则 + LLM）
+  const unifiedAgent = new UnifiedSemanticAgent(llmClient);
   
   // 注册理解层 Agent
-  orchestrator.register('nlu-agent', new NLUBAgent(llmClient));
-  orchestrator.register('semantic-agent', semanticAgent);
+  orchestrator.register('nlu-agent', unifiedAgent);
+  orchestrator.register('semantic-agent', unifiedAgent);  // 同一个实例
   orchestrator.register('clarification-agent', new ClarificationAgent(llmClient));
   
   // 注册执行层 Agent
@@ -431,7 +492,7 @@ export function createOrchestrator(
   orchestrator.register('insight-agent', new InsightAgent(llmClient));
   orchestrator.register('visualization-agent', new VisualizationAgent());
   
-  console.log(`[Orchestrator] Semantic Agent: ${useVectorSearch ? 'Vector (向量嵌入)' : 'Rule (规则匹配)'}`);
+  console.log('[Orchestrator] 使用统一语义理解 Agent（向量 + 规则 + LLM）');
   
   return orchestrator;
 }
