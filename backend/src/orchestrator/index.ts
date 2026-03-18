@@ -23,6 +23,7 @@ import {
 import { LLMClient } from '../agents/base';
 import { NLUBAgent } from '../agents/understanding/nlu-agent';
 import { SemanticAgent } from '../agents/understanding/semantic-agent';
+import { VectorSemanticAgent } from '../agents/understanding/vector-semantic-agent';
 import { ClarificationAgent } from '../agents/understanding/clarification-agent';
 import { SQLGeneratorAgent } from '../agents/execution/sql-generator-agent';
 import { ValidatorAgent } from '../agents/execution/validator-agent';
@@ -410,9 +411,15 @@ export function createOrchestrator(
 ): AgentOrchestrator {
   const orchestrator = new AgentOrchestrator(config);
   
+  // 选择 Semantic Agent（规则匹配 or 向量嵌入）
+  const useVectorSearch = process.env.USE_VECTOR_SEARCH === 'true';
+  const semanticAgent = useVectorSearch 
+    ? new VectorSemanticAgent() 
+    : new SemanticAgent(semanticConfig);
+  
   // 注册理解层 Agent
   orchestrator.register('nlu-agent', new NLUBAgent(llmClient));
-  orchestrator.register('semantic-agent', new SemanticAgent(semanticConfig));
+  orchestrator.register('semantic-agent', semanticAgent);
   orchestrator.register('clarification-agent', new ClarificationAgent(llmClient));
   
   // 注册执行层 Agent
@@ -423,6 +430,8 @@ export function createOrchestrator(
   // 注册输出层 Agent
   orchestrator.register('insight-agent', new InsightAgent(llmClient));
   orchestrator.register('visualization-agent', new VisualizationAgent());
+  
+  console.log(`[Orchestrator] Semantic Agent: ${useVectorSearch ? 'Vector (向量嵌入)' : 'Rule (规则匹配)'}`);
   
   return orchestrator;
 }
