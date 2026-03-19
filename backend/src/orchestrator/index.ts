@@ -21,8 +21,7 @@ import {
   BaseAgent,
 } from '../agents/types';
 import { LLMClient } from '../agents/base';
-import { NLUBAgent } from '../agents/understanding/nlu-agent';
-import { SemanticAgent } from '../agents/understanding/semantic-agent';
+import { UnifiedSemanticAgent } from '../agents/understanding/unified-semantic-agent';
 import { ClarificationAgent } from '../agents/understanding/clarification-agent';
 import { SQLGeneratorAgent } from '../agents/execution/sql-generator-agent';
 import { ValidatorAgent } from '../agents/execution/validator-agent';
@@ -102,7 +101,7 @@ export class AgentOrchestrator {
   /**
    * 执行完整查询流程
    */
-  async execute(query: string, context: AgentContext): Promise<QueryResult> {
+  async execute(query: string, context: AgentContext, datasourceId?: string): Promise<QueryResult> {
     const startTime = Date.now();
     const result: QueryResult = { success: true };
     const errors: AgentError[] = [];
@@ -118,6 +117,9 @@ export class AgentOrchestrator {
     if (this.config.debug) {
       console.log(`[Orchestrator] 会话ID: ${sessionId}`);
       console.log(`[Orchestrator] 是否追问: ${isFollowUp}`);
+      if (datasourceId) {
+        console.log(`[Orchestrator] 数据源: ${datasourceId}`);
+      }
     }
     
     try {
@@ -127,7 +129,11 @@ export class AgentOrchestrator {
       
       // 1.1 NLU Agent
       if (this.config.debug) console.log('[Orchestrator] 执行 NLU Agent...');
-      const nluResult = await this.executeAgent<NLUOutput>('nlu-agent', { query, context }, context);
+      const nluResult = await this.executeAgent<NLUOutput>('nlu-agent', { 
+        query, 
+        datasourceId,
+        context 
+      }, context);
       
       if (!nluResult.success) {
         errors.push(nluResult.error!);
@@ -150,16 +156,55 @@ export class AgentOrchestrator {
       // 添加用户消息
       contextManager.addMessage(sessionId, 'user', query);
       
-      // 1.2 Semantic Agent
-      if (this.config.debug) console.log('[Orchestrator] 执行 Semantic Agent...');
-      const semanticResult = await this.executeAgent<SemanticOutput>('semantic-agent', {
-        entities: result.entities,
-        query,
-      }, context);
+      // 1.2 构建 mappedFields（基于 NLU 结果）
+      // UnifiedSemanticAgent 已经返回了完整的实体信息，直接使用
+      const mappedFields: any[] = [];
+      const tables = new Set<string>();
       
-      if (!semanticResult.success) {
-        errors.push(semanticResult.error!);
+      // 构建 SQL Generator 需要的 entities 格式
+      // 已经是完整格式，包含表名和聚合方式
+      const sqlEntities = {
+        metrics: result.entities.metrics || [],
+        dimensions: result.entities.dimensions || [],
+        filters: result.entities.filters || {},
+        groupBy: result.entities.groupBy || [],
+        orderBy: result.entities.orderBy,
+        limit: result.entities.limit || 100,
+        timeRange: result.entities.timeRange,
+      };
+      
+      // 构建 mappedFields（用于可视化提示等）
+      for (const metric of result.entities.metrics || []) {
+        mappedFields.push({
+          userTerm: metric.field,
+          dbField: metric.field,
+          dbTable: metric.table,
+          fieldType: 'metric',
+          confidence: metric.confidence || 0.9,
+        });
+        tables.add(metric.table);
       }
+      
+      for (const dim of result.entities.dimensions || []) {
+        mappedFields.push({
+          userTerm: dim.field,
+          dbField: dim.field,
+          dbTable: dim.table,
+          fieldType: 'dimension',
+          confidence: dim.confidence || 0.9,
+        });
+        tables.add(dim.table);
+      }
+      
+      const semanticResult = {
+        success: true,
+        data: {
+          mappedFields,
+          availableTables: Array.from(tables),
+          joinHints: [],
+          unmappedTerms: [],
+        },
+      };
       
       // 1.3 Clarification Agent（如果需要）
       if (nluResult.data!.confidence < 0.7 || 
@@ -410,9 +455,12 @@ export function createOrchestrator(
 ): AgentOrchestrator {
   const orchestrator = new AgentOrchestrator(config);
   
+  // 使用统一的语义理解 Agent（向量 + 规则 + LLM）
+  const unifiedAgent = new UnifiedSemanticAgent(llmClient);
+  
   // 注册理解层 Agent
-  orchestrator.register('nlu-agent', new NLUBAgent(llmClient));
-  orchestrator.register('semantic-agent', new SemanticAgent(semanticConfig));
+  orchestrator.register('nlu-agent', unifiedAgent);
+  orchestrator.register('semantic-agent', unifiedAgent);  // 同一个实例
   orchestrator.register('clarification-agent', new ClarificationAgent(llmClient));
   
   // 注册执行层 Agent
@@ -423,6 +471,8 @@ export function createOrchestrator(
   // 注册输出层 Agent
   orchestrator.register('insight-agent', new InsightAgent(llmClient));
   orchestrator.register('visualization-agent', new VisualizationAgent());
+  
+  console.log('[Orchestrator] 使用统一语义理解 Agent（向量 + 规则 + LLM）');
   
   return orchestrator;
 }

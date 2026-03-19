@@ -27,6 +27,7 @@ export interface SQLGeneratorInput {
   mappedFields?: any[];
 }
 
+// 字段所属表映射（后备使用，优先使用输入中的 table 字段）
 // 字段所属表映射 - 医疗产品采购数据
 const DEFAULT_TABLE = 't_ai_medical_product_records';
 
@@ -252,6 +253,14 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
     const metricAgg = metric.aggregation || 'SUM';
     
     const groupField = groupBy[0];
+    
+    // 检查是否是时间分组
+    const timeGroupUnits = ['month', 'day', 'week', 'year'];
+    if (timeGroupUnits.includes(groupField)) {
+      return this.generateTimeGroupSQL(metricField, metricAgg, metricTable, groupField, filters, entities);
+    }
+    
+    const groupTable = FIELD_TABLE_MAPPING[groupField] || 'orders';
     const groupTable = FIELD_TABLE_MAPPING[groupField] || DEFAULT_TABLE;
     
     let sql = '';
@@ -268,6 +277,58 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
     }
     
     return { sql, explanation };
+  }
+  
+  /**
+   * 生成时间分组 SQL
+   */
+  private generateTimeGroupSQL(
+    metricField: string,
+    metricAgg: string,
+    table: string,
+    timeUnit: string,
+    filters: Record<string, any>,
+    entities: any
+  ): SQLGeneratorOutput {
+    // 时间格式映射
+    const dateFormatMap: Record<string, string> = {
+      'month': '%Y-%m',
+      'day': '%Y-%m-%d',
+      'week': '%Y-%u',
+      'year': '%Y',
+    };
+    
+    const dateFormat = dateFormatMap[timeUnit] || '%Y-%m';
+    const alias = timeUnit;
+    
+    let sql = `SELECT DATE_FORMAT(\`order_date\`, '${dateFormat}') AS \`${alias}\`, ${metricAgg}(\`${metricField}\`) AS \`total\` FROM \`${table}\``;
+    
+    // WHERE 条件
+    const whereClauses: string[] = [];
+    for (const [field, value] of Object.entries(filters)) {
+      whereClauses.push(`\`${field}\` = '${value}'`);
+    }
+    
+    // 时间范围
+    if (entities.timeRange) {
+      whereClauses.push(this.buildTimeCondition(entities.timeRange, table));
+    }
+    
+    if (whereClauses.length > 0) {
+      sql += ` WHERE ${whereClauses.join(' AND ')}`;
+    }
+    
+    sql += ` GROUP BY \`${alias}\``;
+    
+    // ORDER BY
+    sql += ` ORDER BY \`${alias}\` ASC`;
+    
+    sql += ` LIMIT ${entities.limit || 100}`;
+    
+    return {
+      sql,
+      explanation: `按${timeUnit === 'month' ? '月' : timeUnit === 'day' ? '天' : timeUnit}分组统计`,
+    };
   }
   
   /**
@@ -380,7 +441,7 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
    */
   private buildTimeCondition(timeRange: any, tablePrefix: string = ''): string {
     const prefix = tablePrefix ? `${tablePrefix}.` : '';
-    const dateField = `${prefix}order_date`;
+    const dateField = `${prefix}\`order_date\``;
     
     // 年份
     if (timeRange.expression === 'year') {
@@ -392,11 +453,41 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
       return `MONTH(${dateField}) = ${timeRange.month}`;
     }
     
+    // 新格式：{ type: "relative", value: "YEAR_1" }
+    if (timeRange.type === 'relative' && typeof timeRange.value === 'string') {
+      const [unit, val] = timeRange.value.split('_');
+      const value = parseInt(val) || 1;
+      
+      let dateFunc = '';
+      switch (unit.toUpperCase()) {
+        case 'DAY':
+          dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value} DAY)`;
+          break;
+        case 'WEEK':
+          dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value} WEEK)`;
+          break;
+        case 'MONTH':
+          dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value} MONTH)`;
+          break;
+        case 'QUARTER':
+          dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value * 3} MONTH)`;
+          break;
+        case 'YEAR':
+          dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value} YEAR)`;
+          break;
+        default:
+          dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value} DAY)`;
+      }
+      
+      return `DATE(${dateField}) >= ${dateFunc}`;
+    }
+    
+    // 旧格式：{ unit, value, operator }
     const { unit, value, operator } = timeRange;
     
     // 根据时间单位构建条件
     let dateFunc = '';
-    switch (unit.toUpperCase()) {
+    switch (unit?.toUpperCase()) {
       case 'DAY':
         dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value} DAY)`;
         break;
@@ -413,7 +504,7 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
         dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value} YEAR)`;
         break;
       default:
-        dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value} DAY)`;
+        dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value || 30} DAY)`;
     }
     
     if (operator === '=') {

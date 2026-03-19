@@ -86,6 +86,10 @@ const TIME_EXPRESSIONS: Record<string, { unit: string; value: number; operator: 
   '最近三个月': { unit: 'MONTH', value: 3, operator: '>=' },
   '最近半年': { unit: 'MONTH', value: 6, operator: '>=' },
   '最近一年': { unit: 'YEAR', value: 1, operator: '>=' },
+  '过去一年': { unit: 'YEAR', value: 1, operator: '>=' },
+  '过去一个月': { unit: 'MONTH', value: 1, operator: '>=' },
+  '过去三个月': { unit: 'MONTH', value: 3, operator: '>=' },
+  '过去半年': { unit: 'MONTH', value: 6, operator: '>=' },
   '本周': { unit: 'WEEK', value: 1, operator: '>=' },
   '本月': { unit: 'MONTH', value: 1, operator: '>=' },
   '上月': { unit: 'MONTH', value: 2, operator: '=' },
@@ -161,9 +165,38 @@ export class NLUBAgent extends LLMAgent<NLUInput, NLUOutput> {
     const dimensions = this.extractDimensions(query);
     result.entities.dimensions = dimensions;
     
+    // 确保 groupBy 是数组
+    if (!result.entities.groupBy) {
+      result.entities.groupBy = [];
+    }
+    
     // 检查是否需要 GROUP BY
     if (/按|每个|各|分别|不同|各类/.test(query)) {
-      result.entities.groupBy = dimensions.map(d => d.field);
+      result.entities.groupBy = dimensions.map((d: any) => d.field);
+    }
+    
+    // 检查时间分组（每月、每天、每年、每周）
+    if (/每月|按月|月度|月份/.test(query)) {
+      result.entities.groupBy.push('month');
+      // 添加时间维度
+      if (!dimensions.find((d: any) => d.field === 'order_date' || d.field === 'month')) {
+        (result.entities.dimensions as any[]).push({ field: 'order_date', table: 'orders', timeUnit: 'month' });
+      }
+    } else if (/每天|按天|日度|日期/.test(query)) {
+      result.entities.groupBy.push('day');
+      if (!dimensions.find((d: any) => d.field === 'order_date' || d.field === 'day')) {
+        (result.entities.dimensions as any[]).push({ field: 'order_date', table: 'orders', timeUnit: 'day' });
+      }
+    } else if (/每周|按周|周度/.test(query)) {
+      result.entities.groupBy.push('week');
+      if (!dimensions.find((d: any) => d.field === 'order_date' || d.field === 'week')) {
+        (result.entities.dimensions as any[]).push({ field: 'order_date', table: 'orders', timeUnit: 'week' });
+      }
+    } else if (/每年|按年|年度/.test(query)) {
+      result.entities.groupBy.push('year');
+      if (!dimensions.find((d: any) => d.field === 'order_date' || d.field === 'year')) {
+        (result.entities.dimensions as any[]).push({ field: 'order_date', table: 'orders', timeUnit: 'year' });
+      }
     }
     
     // 3. 提取筛选条件
@@ -201,12 +234,16 @@ export class NLUBAgent extends LLMAgent<NLUInput, NLUOutput> {
     
     const patterns = [
       { regex: /销售额?|销售金额|销售总额/, field: 'total_amount', table: 'orders', agg: 'SUM' },
-      { regex: /订单数|订单量|有多少订单/, field: 'order_id', table: 'orders', agg: 'COUNT' },
+      { regex: /订单数|订单量|有多少订单|订单.*数/, field: 'order_id', table: 'orders', agg: 'COUNT' },
       { regex: /客户数|客户总数|客户数量/, field: 'customer_id', table: 'customers', agg: 'COUNT' },
       { regex: /产品数|商品数/, field: 'product_id', table: 'products', agg: 'COUNT' },
+      { regex: /订单额|订单金额/, field: 'total_amount', table: 'orders', agg: 'SUM' },
+      { regex: /金额|总计|总额/, field: 'total_amount', table: 'orders', agg: 'SUM' },
       { regex: /平均.*订单|客单价|平均.*金额/, field: 'total_amount', table: 'orders', agg: 'AVG' },
       { regex: /最高|最大|最多的/, field: 'total_amount', table: 'orders', agg: 'MAX' },
       { regex: /最低|最小|最少的/, field: 'total_amount', table: 'orders', agg: 'MIN' },
+      { regex: /趋势|变化|统计|分析/, field: 'total_amount', table: 'orders', agg: 'SUM' },
+      { regex: /订单/, field: 'order_id', table: 'orders', agg: 'COUNT' },
     ];
     
     for (const p of patterns) {
