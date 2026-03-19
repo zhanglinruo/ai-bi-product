@@ -9,7 +9,7 @@ export * from './types';
 export * from './base';
 
 // 理解层 Agent
-export { NLUBAgent } from './understanding/nlu-agent';
+export { UnifiedSemanticAgent } from './understanding/unified-semantic-agent';
 export { SemanticAgent } from './understanding/semantic-agent';
 export { ClarificationAgent } from './understanding/clarification-agent';
 

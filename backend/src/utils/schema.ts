@@ -70,7 +70,19 @@ export async function getTableSample(tableName: string, limit: number = 3): Prom
 /**
  * 获取表的统计信息
  */
-export async function getTableStats(tableName: string): Promise<{ rowCount: number }> {
+export interface TableStats {
+  rowCount: number;
+}
+
+export interface ForeignKeyInfo {
+  table: string;
+  column: string;
+  referencedTable: string;
+  referencedColumn: string;
+  constraintName: string;
+}
+
+export async function getTableStats(tableName: string): Promise<TableStats> {
   try {
     const [rows] = await dbPool.query(`SELECT COUNT(*) as count FROM \`${tableName}\``);
     return { rowCount: (rows as any[])[0].count };

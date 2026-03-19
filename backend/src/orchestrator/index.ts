@@ -28,6 +28,7 @@ import { ValidatorAgent } from '../agents/execution/validator-agent';
 import { ExecutorAgent } from '../agents/execution/executor-agent';
 import { InsightAgent } from '../agents/output/insight-agent';
 import { VisualizationAgent } from '../agents/output/visualization-agent';
+import { queryCache } from '../utils/cache';
 import { contextManager, ContextManager } from '../utils/context-manager';
 
 /**
@@ -244,6 +245,24 @@ export class AgentOrchestrator {
       result.sql = sqlResult.data!.sql;
       result.sqlExplanation = sqlResult.data!.explanation;
       
+      const cacheKey = queryCache.generateKey(result.sql);
+      const cachedResult = queryCache.get<{ data: any[]; rowCount: number }>(cacheKey);
+      if (cachedResult) {
+        if (this.config.debug) console.log(`[Orchestrator] 缓存命中，跳过执行`);
+        result.data = cachedResult.data;
+        result.rowCount = cachedResult.rowCount;
+        
+        contextManager.addMessage(sessionId, 'assistant', '（来自缓存）查询完成', {
+          entities: result.entities,
+          sql: result.sql,
+          result: result.data,
+        });
+        
+        result.executionTime = Date.now() - startTime;
+        result.errors = errors;
+        return result;
+      }
+      
       // 2.2 Validator Agent
       if (this.config.debug) console.log('[Orchestrator] 执行 Validator Agent...');
       const validationResult = await this.executeAgent<ValidatorOutput>('validator-agent', {
@@ -294,6 +313,8 @@ export class AgentOrchestrator {
       
       result.data = executorResult.data!.data;
       result.rowCount = executorResult.data!.rowCount;
+      
+      queryCache.set(cacheKey, { data: result.data, rowCount: result.rowCount }, 5 * 60 * 1000);
       
       // ========================================
       // 第 3 层：输出层

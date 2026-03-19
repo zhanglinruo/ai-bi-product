@@ -9,6 +9,7 @@ import { createOrchestrator, AgentOrchestrator, QueryResult } from '../../orches
 import { AgentContext } from '../../agents/types';
 import { QianfanLLMClient } from '../../config/llm';
 import { semanticConfig } from '../../config/semantic-layer';
+import { getFriendlyError } from '../../utils/errors';
 
 const router = Router();
 
@@ -103,9 +104,11 @@ router.post('/query', async (req: Request, res: Response) => {
     
   } catch (error: any) {
     console.error('[Agent API] 查询错误:', error);
+    const friendly = getFriendlyError(error);
     res.status(500).json({
       success: false,
-      message: error.message,
+      message: friendly.userMessage,
+      hint: friendly.hint,
     });
   }
 });

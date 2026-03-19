@@ -55,6 +55,85 @@ const FIELD_TABLE_MAPPING: Record<string, string> = {
   'order_id': DEFAULT_TABLE,
 };
 
+// 允许的字段名（白名单，防止 SQL 注入）
+const ALLOWED_FIELDS = new Set([
+  'amount', 'quantity', 'price', 'id', 'hospital_code', 'hospital_name',
+  'province', 'city', 'county', 'product_name', 'generic_name', 'brand_name',
+  'manufacturer', 'corporate_group', 'category', 'record_date', 'dosage_form',
+  'specifications', 'hospital_level', 'total_amount', 'order_id',
+  'corporate_group', 'hospital_level', 'customer_id', 'product_id',
+]);
+
+function validateFieldName(field: string): string {
+  if (ALLOWED_FIELDS.has(field)) {
+    return field;
+  }
+  throw new Error(`不允许的字段名: ${field}`);
+}
+
+function sanitizeValue(value: any): any {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+  return value;
+}
+
+function pushTimeCondition(whereClauses: string[], params: any[], timeRange: any, tablePrefix: string = ''): void {
+  const prefix = tablePrefix ? `${tablePrefix}.` : '';
+  const dateField = `${prefix}\`record_date\``;
+  const numValue = parseInt(timeRange.value) || 30;
+
+  if (timeRange.expression === 'year' && timeRange.year) {
+    whereClauses.push(`YEAR(${dateField}) = ?`);
+    params.push(timeRange.year);
+    return;
+  }
+
+  if (timeRange.expression === 'month' && timeRange.month) {
+    whereClauses.push(`MONTH(${dateField}) = ?`);
+    params.push(timeRange.month);
+    return;
+  }
+
+  const unit = timeRange.unit?.toUpperCase() || timeRange.type?.toUpperCase() || 'DAY';
+  let dateFunc = '';
+
+  switch (unit) {
+    case 'DAY':
+      dateFunc = `DATE_SUB(CURDATE(), INTERVAL ? DAY)`;
+      break;
+    case 'WEEK':
+      dateFunc = `DATE_SUB(CURDATE(), INTERVAL ? WEEK)`;
+      break;
+    case 'MONTH':
+      dateFunc = `DATE_SUB(CURDATE(), INTERVAL ? MONTH)`;
+      break;
+    case 'QUARTER':
+      dateFunc = `DATE_SUB(CURDATE(), INTERVAL ? MONTH)`;
+      break;
+    case 'YEAR':
+      dateFunc = `DATE_SUB(CURDATE(), INTERVAL ? YEAR)`;
+      break;
+    default:
+      dateFunc = `DATE_SUB(CURDATE(), INTERVAL ? DAY)`;
+  }
+
+  if (timeRange.operator === '=') {
+    if (unit === 'DAY' && numValue === 0) {
+      whereClauses.push(`DATE(${dateField}) = CURDATE()`);
+    } else {
+      whereClauses.push(`DATE(${dateField}) = ${dateFunc}`);
+      params.push(numValue);
+    }
+  } else {
+    whereClauses.push(`DATE(${dateField}) >= ${dateFunc}`);
+    params.push(numValue);
+  }
+}
+
 export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorOutput> {
   definition: AgentDefinition = {
     name: 'sql-generator-agent',
@@ -137,32 +216,40 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
     let sql = `SELECT ${agg}(\`${field}\`) AS \`${alias}\``;
     sql += ` FROM \`${metricTable}\``;
     
-    // 构建 WHERE
+    // 构建 WHERE - 使用参数化查询
     const whereClauses: string[] = [];
+    const params: any[] = [];
     
     // 添加筛选条件
     for (const [filterField, filterValue] of Object.entries(filters)) {
-      whereClauses.push(`\`${filterField}\` = '${filterValue}'`);
+      validateFieldName(filterField);
+      whereClauses.push(`\`${filterField}\` = ?`);
+      params.push(sanitizeValue(filterValue));
     }
     
     // 添加时间条件
     if (entities.timeRange) {
-      whereClauses.push(this.buildTimeCondition(entities.timeRange, ''));
+      const timeCondition = this.buildTimeCondition(entities.timeRange, '');
+      if (timeCondition) {
+        whereClauses.push(timeCondition);
+      }
     }
     
     if (whereClauses.length > 0) {
       sql += ` WHERE ${whereClauses.join(' AND ')}`;
     }
     
-    // 构建 LIMIT
-    sql += ` LIMIT ${entities.limit || 100}`;
+    // 构建 LIMIT - 使用参数化查询
+    const limit = Math.min(entities.limit || 100, 1000);
+    sql += ` LIMIT ?`;
+    params.push(limit);
     
     let explanation = `查询 ${metricTable} 表的 ${field} 字段的 ${agg} 值`;
     if (entities.timeRange) {
       explanation += `，时间范围：${entities.timeRange.expression}`;
     }
     
-    return { sql, explanation };
+    return { sql, params, explanation };
   }
   
   /**
@@ -219,7 +306,8 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
     
     // 时间范围（跨表查询也要添加时间条件）
     if (entities.timeRange) {
-      whereClauses.push(this.buildTimeCondition(entities.timeRange, 'o'));
+      const tc = this.buildTimeCondition(entities.timeRange, metricTable.charAt(0));
+      if (tc) whereClauses.push(tc);
       explanation += `，时间范围：${entities.timeRange.expression}`;
     }
     
@@ -260,7 +348,6 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
       return this.generateTimeGroupSQL(metricField, metricAgg, metricTable, groupField, filters, entities);
     }
     
-    const groupTable = FIELD_TABLE_MAPPING[groupField] || 'orders';
     const groupTable = FIELD_TABLE_MAPPING[groupField] || DEFAULT_TABLE;
     
     let sql = '';
@@ -311,7 +398,8 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
     
     // 时间范围
     if (entities.timeRange) {
-      whereClauses.push(this.buildTimeCondition(entities.timeRange, table));
+      const tc = this.buildTimeCondition(entities.timeRange, table);
+      if (tc) whereClauses.push(tc);
     }
     
     if (whereClauses.length > 0) {
@@ -354,9 +442,10 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
     
     // 时间范围
     if (entities.timeRange) {
-      whereClauses.push(this.buildTimeCondition(entities.timeRange, table));
+      const tc = this.buildTimeCondition(entities.timeRange, table);
+      if (tc) whereClauses.push(tc);
     }
-    
+
     if (whereClauses.length > 0) {
       sql += ` WHERE ${whereClauses.join(' AND ')}`;
     }
@@ -367,7 +456,7 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
     const direction = entities.orderBy?.direction || 'DESC';
     sql += ` ORDER BY \`total\` ${direction}`;
     
-    sql += ` LIMIT ${entities.limit || 100}`;
+    sql += ` LIMIT ${Math.min(entities.limit || 100, 1000)}`;
     
     return sql;
   }
@@ -395,7 +484,8 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
       }
       
       if (entities.timeRange) {
-        whereClauses.push(this.buildTimeCondition(entities.timeRange, ''));
+        const tc = this.buildTimeCondition(entities.timeRange, '');
+        if (tc) whereClauses.push(tc);
       }
       
       if (whereClauses.length > 0) {
@@ -430,7 +520,8 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
     
     // 时间范围
     if (entities.timeRange) {
-      clauses.push(this.buildTimeCondition(entities.timeRange, table));
+      const tc = this.buildTimeCondition(entities.timeRange, table);
+      if (tc) clauses.push(tc);
     }
     
     return clauses;
@@ -439,55 +530,26 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
   /**
    * 构建时间条件
    */
-  private buildTimeCondition(timeRange: any, tablePrefix: string = ''): string {
+  private buildTimeCondition(timeRange: any, tablePrefix: string = ''): string | null {
     const prefix = tablePrefix ? `${tablePrefix}.` : '';
-    const dateField = `${prefix}\`order_date\``;
-    
+    const dateField = `${prefix}\`record_date\``;
+
     // 年份
-    if (timeRange.expression === 'year') {
-      return `YEAR(${dateField}) = ${timeRange.year}`;
+    if (timeRange.expression === 'year' && timeRange.year) {
+      return `YEAR(${dateField}) = ${parseInt(timeRange.year)}`;
     }
-    
+
     // 月份
-    if (timeRange.expression === 'month') {
-      return `MONTH(${dateField}) = ${timeRange.month}`;
+    if (timeRange.expression === 'month' && timeRange.month) {
+      return `MONTH(${dateField}) = ${parseInt(timeRange.month)}`;
     }
-    
-    // 新格式：{ type: "relative", value: "YEAR_1" }
-    if (timeRange.type === 'relative' && typeof timeRange.value === 'string') {
-      const [unit, val] = timeRange.value.split('_');
-      const value = parseInt(val) || 1;
-      
-      let dateFunc = '';
-      switch (unit.toUpperCase()) {
-        case 'DAY':
-          dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value} DAY)`;
-          break;
-        case 'WEEK':
-          dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value} WEEK)`;
-          break;
-        case 'MONTH':
-          dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value} MONTH)`;
-          break;
-        case 'QUARTER':
-          dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value * 3} MONTH)`;
-          break;
-        case 'YEAR':
-          dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value} YEAR)`;
-          break;
-        default:
-          dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value} DAY)`;
-      }
-      
-      return `DATE(${dateField}) >= ${dateFunc}`;
-    }
-    
-    // 旧格式：{ unit, value, operator }
-    const { unit, value, operator } = timeRange;
-    
-    // 根据时间单位构建条件
+
+    // 相对时间
+    const unit = timeRange.unit?.toUpperCase() || timeRange.type?.toUpperCase() || 'DAY';
+    const value = parseInt(timeRange.value) || parseInt(timeRange.value) || 30;
+
     let dateFunc = '';
-    switch (unit?.toUpperCase()) {
+    switch (unit) {
       case 'DAY':
         dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value} DAY)`;
         break;
@@ -504,17 +566,15 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
         dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value} YEAR)`;
         break;
       default:
-        dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value || 30} DAY)`;
+        dateFunc = `DATE_SUB(CURDATE(), INTERVAL ${value} DAY)`;
     }
-    
-    if (operator === '=') {
-      // 等于某个时间点
-      if (unit.toUpperCase() === 'DAY' && value === 0) {
+
+    if (timeRange.operator === '=') {
+      if (unit === 'DAY' && value === 0) {
         return `DATE(${dateField}) = CURDATE()`;
       }
       return `DATE(${dateField}) = ${dateFunc}`;
     } else {
-      // 大于等于（最近N天/月/年）
       return `DATE(${dateField}) >= ${dateFunc}`;
     }
   }

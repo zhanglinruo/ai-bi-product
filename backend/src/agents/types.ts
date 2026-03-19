@@ -153,6 +153,7 @@ export interface ClarificationQuestion {
  */
 export interface SQLGeneratorOutput {
   sql: string;
+  params?: any[];
   explanation: string;
   estimatedRows?: number;
   warnings?: string[];

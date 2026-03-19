@@ -9,8 +9,6 @@ import { pipeline, env } from '@xenova/transformers';
 
 // 配置模型缓存目录和镜像
 env.cacheDir = './models';
-// 使用 Hugging Face 镜像（国内加速）
-env.remoteHost = 'https://hf-mirror.com';
 
 export interface EmbeddingResult {
   embedding: number[];
@@ -212,6 +210,22 @@ export class LocalEmbeddingService {
    */
   isInitialized(): boolean {
     return this.initialized;
+  }
+
+  /**
+   * 预热模型（首次查询会更快）
+   */
+  async prewarm(): Promise<void> {
+    await this.initialize();
+    if (!this.extractor) return;
+    
+    try {
+      console.log('[LocalEmbedding] 预热模型...');
+      await this.extractor('warmup', { pooling: 'mean', normalize: true });
+      console.log('[LocalEmbedding] 预热完成');
+    } catch (error: any) {
+      console.warn('[LocalEmbedding] 预热警告:', error.message);
+    }
   }
 }
 

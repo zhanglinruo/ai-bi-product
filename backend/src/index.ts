@@ -17,7 +17,7 @@ import auditRoutes from './modules/audit/routes';
 import semanticRoutes from './modules/semantic/routes';
 import schemaRoutes from './modules/schema/routes';
 import dbPool from './config/database';
-import { QianfanLLMClient } from './config/llm';
+import { getLocalEmbeddingService } from './services/local-embedding';
 import { semanticConfig } from './config/semantic-layer';
 
 // 初始化工具
@@ -86,6 +86,12 @@ const server = app.listen(serverConfig.port, () => {
   
   // 初始化 Agent 系统
   initializeAgentSystem();
+  
+  // 预热 Embedding 模型
+  setTimeout(() => {
+    const embeddingService = getLocalEmbeddingService();
+    embeddingService.prewarm().catch(console.error);
+  }, 1000);
   
   console.log('\n📚 API 端点:');
   console.log('   POST /api/agent/query      - Agent 架构查询');
