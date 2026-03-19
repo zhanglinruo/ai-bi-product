@@ -20,10 +20,10 @@ router.get('/', async (req: Request, res: Response) => {
     const offset = parseInt(req.query.offset as string) || 0;
     
     const history = await query<any[]>(
-      `SELECT id, query_text, \`sql\`, result_summary, row_count, execution_time, is_favorite, created_at 
-       FROM query_history 
-       WHERE user_id = ? 
-       ORDER BY created_at DESC 
+      `SELECT id, question, sql_generated, conclusion, row_count, execution_time, status, created_at
+       FROM query_history
+       WHERE user_id = ?
+       ORDER BY created_at DESC
        LIMIT ? OFFSET ?`,
       [userId, limit, offset]
     );
@@ -49,19 +49,19 @@ router.post('/', async (req: Request, res: Response) => {
   try {
     const userId = req.user!.id;
     const { query_text, sql, result_summary, row_count, execution_time } = req.body;
-    
+
     if (!query_text) {
       return res.status(400).json({ success: false, message: '查询内容不能为空' });
     }
-    
+
     const id = uuidv4();
-    
+
     await query(
-      `INSERT INTO query_history (id, user_id, query_text, \`sql\`, result_summary, row_count, execution_time)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO query_history (id, user_id, question, sql_generated, conclusion, row_count, execution_time, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'success')`,
       [id, userId, query_text, sql, result_summary, row_count, execution_time]
     );
-    
+
     res.status(201).json({
       success: true,
       message: '保存成功',

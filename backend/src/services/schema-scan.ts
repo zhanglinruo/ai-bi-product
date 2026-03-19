@@ -52,14 +52,14 @@ export class SchemaScanService {
     try {
       console.log(`[SchemaScan] 开始扫描数据源: ${datasourceId}`);
 
-      // 1. 获取所有表
+      // 1. 获取所有表（只扫描 t_ai 开头的表）
       const [tableRows] = await connection.query(`
-        SELECT 
+        SELECT
           TABLE_NAME as table_name,
           TABLE_COMMENT as table_comment,
           TABLE_ROWS as table_rows
-        FROM information_schema.TABLES 
-        WHERE TABLE_SCHEMA = ?
+        FROM information_schema.TABLES
+        WHERE TABLE_SCHEMA = ? AND TABLE_NAME LIKE 't_ai%'
         ORDER BY TABLE_NAME
       `, [connectionConfig.database]);
 

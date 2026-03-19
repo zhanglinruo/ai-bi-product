@@ -68,10 +68,11 @@ export function checkSQLSecurity(sql: string, options: {
   const issues: SecurityIssue[] = [];
   let riskLevel: 'safe' | 'low' | 'medium' | 'high' | 'critical' = 'safe';
   
-  // 1. 检查危险关键词
+  // 1. 检查危险关键词（整词匹配）
   const upperSQL = sql.toUpperCase();
   for (const keyword of DANGEROUS_KEYWORDS) {
-    if (upperSQL.includes(keyword)) {
+    const pattern = new RegExp(`\\b${keyword}\\b`, 'i');
+    if (pattern.test(upperSQL)) {
       issues.push({
         type: 'dangerous_keyword',
         message: `检测到危险关键词: ${keyword}`,
@@ -82,8 +83,22 @@ export function checkSQLSecurity(sql: string, options: {
     }
   }
   
-  // 2. 检查 SQL 注入模式
-  for (const pattern of INJECTION_PATTERNS) {
+  // 2. 检查 SQL 注入模式（排除注释符在字段名中的情况）
+  const dangerousInjectionPatterns = [
+    /;\s*(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE)/i,
+    /\/\*/,
+    /\bOR\s+1\s*=\s*1\b/i,
+    /\bOR\s+'[^']*'\s*=\s*'[^']*'/i,
+    /\bOR\s+"[^"]*"\s*=\s*"[^"]*"/i,
+    /\bUNION\s+(ALL\s+)?SELECT\b/i,
+    /'\s*OR\s*'/i,
+    /"\s*OR\s*"/i,
+    /\bSLEEP\s*\(/i,
+    /\bBENCHMARK\s*\(/i,
+    /\bLOAD_FILE\s*\(/i,
+    /\bINTO\s+(OUT|DUMP)FILE\b/i,
+  ];
+  for (const pattern of dangerousInjectionPatterns) {
     if (pattern.test(sql)) {
       issues.push({
         type: 'injection_pattern',

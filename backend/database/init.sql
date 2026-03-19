@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS datasources (
     username        VARCHAR(100) COMMENT '用户名',
     password_enc    VARCHAR(255) COMMENT '加密后的密码',
     file_path       VARCHAR(500) COMMENT '文件路径(Excel/CSV用)',
+    connection_config JSON COMMENT '连接配置（JSON格式）',
     api_config      JSON COMMENT 'API配置',
     status          VARCHAR(20) DEFAULT 'active' COMMENT '状态: active/disabled',
     created_by      CHAR(36) COMMENT '创建者ID',

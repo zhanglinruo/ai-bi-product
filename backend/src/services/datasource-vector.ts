@@ -123,9 +123,9 @@ export class DatasourceVectorService {
   }> {
     // 获取指标
     const metricRows = await query<any>(`
-      SELECT 
+      SELECT
         column_name as field,
-        table_name as table,
+        table_name as \`table\`,
         COALESCE(semantic_name, column_name) as name,
         semantic_description,
         'SUM' as aggregation
@@ -136,9 +136,9 @@ export class DatasourceVectorService {
 
     // 获取维度
     const dimensionRows = await query<any>(`
-      SELECT 
+      SELECT
         column_name as field,
-        table_name as table,
+        table_name as \`table\`,
         COALESCE(semantic_name, column_name) as name,
         semantic_description
       FROM schema_columns

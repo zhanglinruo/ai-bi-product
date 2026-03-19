@@ -30,6 +30,9 @@ import { InsightAgent } from '../agents/output/insight-agent';
 import { VisualizationAgent } from '../agents/output/visualization-agent';
 import { queryCache } from '../utils/cache';
 import { contextManager, ContextManager } from '../utils/context-manager';
+import { getSchemaScanService } from '../services/schema-scan';
+import { query as dbQuery } from '../config/database';
+import { decrypt } from '../utils/crypto';
 
 /**
  * 完整的查询结果
@@ -156,7 +159,55 @@ export class AgentOrchestrator {
       
       // 添加用户消息
       contextManager.addMessage(sessionId, 'user', query);
-      
+
+      // 自动扫描数据源（如果未扫描）
+      if (datasourceId) {
+        const scanService = getSchemaScanService();
+        const alreadyScanned = await scanService.isScanned(datasourceId);
+        if (!alreadyScanned) {
+          console.log(`[Orchestrator] 数据源 ${datasourceId} 尚未扫描，开始自动扫描...`);
+          try {
+            const [datasource] = await dbQuery<any>(`
+              SELECT id, name, type, host, port, database_name, username, password_encrypted, connection_config
+              FROM datasources
+              WHERE id = ?
+            `, [datasourceId]);
+
+            if (datasource) {
+              let connectionConfig;
+              try {
+                if (datasource.connection_config) {
+                  connectionConfig = typeof datasource.connection_config === 'string'
+                    ? JSON.parse(datasource.connection_config)
+                    : datasource.connection_config;
+                } else if (datasource.host) {
+                  connectionConfig = {
+                    host: datasource.host,
+                    port: datasource.port || 3306,
+                    database: datasource.database_name,
+                    user: datasource.username,
+                    password: datasource.password_encrypted ? decrypt(datasource.password_encrypted) : null,
+                  };
+                } else {
+                  throw new Error('数据源缺少连接配置');
+                }
+              } catch (e) {
+                console.error(`[Orchestrator] 解析连接配置失败: ${e}`);
+                connectionConfig = null;
+              }
+
+              if (connectionConfig) {
+                const scanResult = await scanService.scanDatasource(datasourceId, connectionConfig);
+                await scanService.saveScanResult(scanResult);
+                console.log(`[Orchestrator] 数据源扫描完成: ${scanResult.totalCount} 表`);
+              }
+            }
+          } catch (scanError: any) {
+            console.error(`[Orchestrator] 数据源扫描失败: ${scanError.message}`);
+          }
+        }
+      }
+
       // 1.2 构建 mappedFields（基于 NLU 结果）
       // UnifiedSemanticAgent 已经返回了完整的实体信息，直接使用
       const mappedFields: any[] = [];
@@ -208,8 +259,9 @@ export class AgentOrchestrator {
       };
       
       // 1.3 Clarification Agent（如果需要）
-      if (nluResult.data!.confidence < 0.7 || 
-          (semanticResult.data?.unmappedTerms?.length || 0) > 0) {
+      const unmappedTermsLength = semanticResult.data?.unmappedTerms?.length ?? 0;
+      if (nluResult.data!.confidence < 0.7 || unmappedTermsLength > 0) {
+        console.log('[Orchestrator] 需要澄清: confidence=' + nluResult.data!.confidence + ', unmappedTerms=' + unmappedTermsLength);
         
         if (this.config.debug) console.log('[Orchestrator] 执行 Clarification Agent...');
         const clarificationResult = await this.executeAgent<ClarificationOutput>('clarification-agent', {
@@ -227,13 +279,15 @@ export class AgentOrchestrator {
       // 第 2 层：执行层
       // ========================================
       
-      // 2.1 SQL Generator Agent
+      // 1.4 SQL Generator Agent
       if (this.config.debug) console.log('[Orchestrator] 执行 SQL Generator Agent...');
+      console.log('[Orchestrator] 调用 SQLGenerator，entities:', JSON.stringify(result.entities));
       const sqlResult = await this.executeAgent<SQLGeneratorOutput>('sql-generator-agent', {
-        intent: result.intent,
+        intent: result.intent || 'query',
         entities: result.entities,
         mappedFields: semanticResult.data?.mappedFields || [],
       }, context);
+      console.log('[Orchestrator] SQLGenerator 结果:', JSON.stringify(sqlResult));
       
       if (!sqlResult.success) {
         errors.push(sqlResult.error!);
@@ -244,8 +298,9 @@ export class AgentOrchestrator {
       
       result.sql = sqlResult.data!.sql;
       result.sqlExplanation = sqlResult.data!.explanation;
-      
-      const cacheKey = queryCache.generateKey(result.sql);
+
+      const params = this.extractParams(sqlResult.data!.sql, result.entities);
+      const cacheKey = queryCache.generateKey(result.sql, params);
       const cachedResult = queryCache.get<{ data: any[]; rowCount: number }>(cacheKey);
       if (cachedResult) {
         if (this.config.debug) console.log(`[Orchestrator] 缓存命中，跳过执行`);
@@ -295,9 +350,11 @@ export class AgentOrchestrator {
       
       // 2.3 Executor Agent
       if (this.config.debug) console.log('[Orchestrator] 执行 Executor Agent...');
+      console.log('[Orchestrator] 传递给Executor的params:', JSON.stringify(params));
       const executorResult = await this.executeAgent<ExecutorOutput>('executor-agent', {
         sql: result.sql,
         datasourceId: context.datasourceId,
+        params: params,
       }, context);
       
       if (!executorResult.success || !executorResult.data!.success) {
@@ -462,6 +519,21 @@ export class AgentOrchestrator {
     
     state.currentNode++;
     return state;
+  }
+
+  private extractParams(sql: string, entities: any): any[] {
+    const params: any[] = [];
+    const filterCount = (sql.match(/\?/g) || []).length;
+
+    if (entities.filters) {
+      for (const value of Object.values(entities.filters)) {
+        if (params.length < filterCount) {
+          params.push(value);
+        }
+      }
+    }
+
+    return params;
   }
 }
 

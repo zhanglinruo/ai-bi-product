@@ -15,6 +15,7 @@ import {
 export interface ExecutorInput {
   sql: string;
   datasourceId?: string;
+  params?: any[];
   timeout?: number;
   maxRows?: number;
 }
@@ -58,12 +59,13 @@ export class ExecutorAgent extends RuleBasedAgent<ExecutorInput, ExecutorOutput>
   }
   
   protected async run(input: ExecutorInput, context: AgentContext): Promise<ExecutorOutput> {
-    const { sql, timeout = 30000, maxRows = 1000 } = input;
+    const { sql, params, timeout = 30000, maxRows = 1000 } = input;
     const startTime = Date.now();
-    
+    console.log('[Executor] SQL:', sql);
+    console.log('[Executor] Params:', JSON.stringify(params));
+
     try {
-      // 执行查询
-      const result = await this.executeWithTimeout(sql, timeout);
+      const result = await this.executeWithTimeout(sql, params, timeout);
       
       // 处理结果
       let data = result.rows || result;
@@ -98,21 +100,16 @@ export class ExecutorAgent extends RuleBasedAgent<ExecutorInput, ExecutorOutput>
   /**
    * 带超时的查询执行
    */
-  private async executeWithTimeout(sql: string, timeout: number): Promise<any> {
-    // 实际实现应该使用数据库连接池
-    // 这里是简化版
-    
+  private async executeWithTimeout(sql: string, params: any[] | undefined, timeout: number): Promise<any> {
     if (!this.dbPool) {
       throw new Error('数据库连接池未初始化');
     }
-    
-    // 使用 Promise.race 实现超时
-    const queryPromise = this.dbPool.query(sql);
+
+    const queryPromise = this.dbPool.query(sql, params);
     const timeoutPromise = new Promise((_, reject) => {
       setTimeout(() => reject(new Error('查询超时')), timeout);
     });
-    
-    // mysql2 返回 [rows, fields]，我们只需要 rows
+
     const result = await Promise.race([queryPromise, timeoutPromise]);
     const [rows] = result;
     return { rows };

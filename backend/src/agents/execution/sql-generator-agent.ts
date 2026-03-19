@@ -1,6 +1,6 @@
 /**
  * SQL Generator Agent - SQL 生成器
- * 
+ *
  * 负责将结构化意图转换为 SQL
  * 支持：多条件筛选、时间范围、排序、JOIN
  */
@@ -12,6 +12,10 @@ import {
   AgentResult,
   SQLGeneratorOutput,
 } from '../types';
+import { getSQLTemplateService, TemplateMatchResult } from '../../services/sql-template';
+import { getSchemaScanService, TableSchema } from '../../services/schema-scan';
+import { QianfanLLMClient, llmConfig } from '../../config/llm';
+import { query as dbQuery } from '../../config/database';
 
 export interface SQLGeneratorInput {
   intent: string;
@@ -84,7 +88,6 @@ function sanitizeValue(value: any): any {
 function pushTimeCondition(whereClauses: string[], params: any[], timeRange: any, tablePrefix: string = ''): void {
   const prefix = tablePrefix ? `${tablePrefix}.` : '';
   const dateField = `${prefix}\`record_date\``;
-  const numValue = parseInt(timeRange.value) || 30;
 
   if (timeRange.expression === 'year' && timeRange.year) {
     whereClauses.push(`YEAR(${dateField}) = ?`);
@@ -98,6 +101,14 @@ function pushTimeCondition(whereClauses: string[], params: any[], timeRange: any
     return;
   }
 
+  const yearMatch = timeRange.value?.match(/^YEAR_(\d{4})$/);
+  if (yearMatch) {
+    whereClauses.push(`YEAR(${dateField}) = ?`);
+    params.push(parseInt(yearMatch[1]));
+    return;
+  }
+
+  const numValue = parseInt(timeRange.value) || 30;
   const unit = timeRange.unit?.toUpperCase() || timeRange.type?.toUpperCase() || 'DAY';
   let dateFunc = '';
 
@@ -159,22 +170,175 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
   
   constructor(llmClient: LLMClient) {
     super(llmClient, {
-      temperature: 0.1,
-      maxTokens: 1000,
+      temperature: 0.3,
+      maxTokens: 10000,
       maxRetries: 2,
     });
   }
   
   protected async run(input: SQLGeneratorInput, context: AgentContext): Promise<SQLGeneratorOutput> {
-    const { entities } = input;
-    
-    // 如果有 groupBy，生成 GROUP BY SQL
+    const { intent, entities } = input;
+    console.log('[SQLGenerator] 开始生成SQL, intent:', intent);
+    console.log('[SQLGenerator] entities:', JSON.stringify(entities));
+
+    try {
+      const scanService = getSchemaScanService();
+      const templateService = getSQLTemplateService();
+
+      const [schemaTables, templateResults] = await Promise.all([
+        scanService.getDatasourceSchema(context.datasourceId!),
+        templateService.findSimilarTemplates(intent, 3, context.datasourceId),
+      ]);
+
+      const systemPrompt = this.buildSystemPrompt();
+      const userPrompt = await this.buildUserPrompt(intent, entities, schemaTables, templateResults);
+
+      console.log('[SQLGenerator] Schema 表数量:', schemaTables.length);
+      if (schemaTables.length > 0) {
+        console.log('[SQLGenerator] 第一个表的字段:', JSON.stringify(schemaTables[0].columns.map(c => c.columnName)));
+      }
+      console.log('[SQLGenerator] User Prompt 前500字符:', userPrompt.substring(0, 500));
+
+      console.log('[SQLGenerator] 调用 LLM 生成 SQL...');
+      const llmClient = new QianfanLLMClient();
+      const response = await llmClient.chat({
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0.3,
+        maxTokens: 10000,
+      });
+
+      const sqlContent = this.extractSQL(response.content);
+      if (sqlContent) {
+        console.log('[SQLGenerator] LLM 生成的 SQL:', sqlContent);
+        return {
+          sql: sqlContent,
+          explanation: '由大模型生成',
+          estimatedRows: 100,
+        };
+      }
+
+      throw new Error('LLM 未返回有效的 SQL');
+    } catch (error: any) {
+      console.error('[SQLGenerator] LLM 生成失败，降级到规则生成:', error.message);
+      return this.generateFallbackSQL(entities);
+    }
+  }
+
+  private buildSystemPrompt(): string {
+    return `你是一个专业的 SQL 生成助手，擅长根据用户需求生成准确的 MySQL 查询语句。
+
+## 严格规则（必须遵守）
+1. 只生成 SELECT 查询语句，禁止生成 INSERT、UPDATE、DELETE 等操作
+2. 使用参数化查询，所有用户输入的值用 ? 占位符
+3. 表名和字段名用反引号包裹
+4. **必须严格按照下方"数据库表结构"中列出的字段名生成 SQL，不能自行推断或使用未列出的字段名**
+5. 如果用户提到的指标字段在 schema 中不存在，必须选择最接近的字段替代
+6. 时间字段使用 record_date
+7. 返回结果必须包含在 \`\`\`sql\`\`\` 代码块中
+
+## 输出格式
+\`\`\`sql
+SELECT ... FROM ... WHERE ... GROUP BY ... HAVING ... ORDER BY ... LIMIT ...
+\`\`\``;
+  }
+
+  private async buildUserPrompt(
+    intent: string,
+    entities: any,
+    schemaTables: TableSchema[],
+    templateResults: TemplateMatchResult[]
+  ): Promise<string> {
+    let prompt = `## 用户需求\n${intent}\n\n`;
+
+    prompt += `## 解析后的实体\n`;
+    prompt += `- 指标: ${JSON.stringify(entities.metrics, null, 2)}\n`;
+    prompt += `- 维度: ${JSON.stringify(entities.dimensions, null, 2)}\n`;
+    prompt += `- 筛选: ${JSON.stringify(entities.filters, null, 2)}\n`;
+    prompt += `- 分组: ${JSON.stringify(entities.groupBy, null, 2)}\n`;
+    prompt += `- 时间范围: ${JSON.stringify(entities.timeRange, null, 2)}\n`;
+    prompt += `- 限制: ${entities.limit || 100}\n\n`;
+
+    prompt += `## 数据库表结构（SQL必须只使用这些字段）\n`;
+    prompt += `**警告：生成 SQL 时只能使用下方列出的字段名，禁止使用未列出的字段！**\n\n`;
+    for (const table of schemaTables) {
+      prompt += `### ${table.tableName}`;
+      if (table.tableComment) prompt += ` (${table.tableComment})`;
+      prompt += `\n`;
+      for (const col of table.columns) {
+        prompt += `- ${col.columnName}: ${col.columnType}`;
+        if (col.columnComment) prompt += ` (${col.columnComment})`;
+        prompt += '\n';
+      }
+      prompt += `\n`;
+    }
+
+    if (templateResults.length > 0) {
+      prompt += `## 参考模板\n`;
+      for (const match of templateResults) {
+        if (match.score > 0.7) {
+          prompt += `- ${match.template.name} (相似度: ${(match.score * 100).toFixed(0)}%): ${match.template.sql_template}\n`;
+        }
+      }
+    }
+
+    return prompt;
+  }
+
+  private extractSQL(content: string): string | null {
+    const sqlMatch = content.match(/```sql\s*([\s\S]*?)```/);
+    if (sqlMatch) {
+      return sqlMatch[1].trim();
+    }
+    const lines = content.split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('SELECT') || trimmed.startsWith('select')) {
+        return trimmed;
+      }
+    }
+    return null;
+  }
+
+  private generateFallbackSQL(entities: any): SQLGeneratorOutput {
+    console.log('[SQLGenerator] 使用规则降级生成 SQL');
     if (entities.groupBy && entities.groupBy.length > 0) {
       return this.generateGroupBySQL(entities);
     }
-    
-    // 否则生成简单聚合 SQL
     return this.generateSimpleSQL(entities);
+  }
+
+  private applyTemplate(template: any, entities: any): { sql: string } {
+    let sql = template.sql_template;
+
+    sql = sql.replace(/\{\{table\}\}/g, template.dimensions?.split(',')[0] || DEFAULT_TABLE);
+    sql = sql.replace(/\{\{date_field\}\}/g, 'record_date');
+    sql = sql.replace(/\{\{metric\}\}/g, entities.metrics?.[0]?.field || 'quantity');
+    sql = sql.replace(/\{\{dimension\}\}/g, entities.groupBy?.[0] || 'province');
+
+    if (entities.filters?.corporate_group) {
+      sql = sql.replace(/\{\{group_name\}\}/g, entities.filters.corporate_group);
+    }
+
+    if (entities.timeRange?.year) {
+      sql = sql.replace(/\{\{start_date\}\}/g, `${entities.timeRange.year}-01-01`);
+      sql = sql.replace(/\{\{end_date\}\}/g, `${entities.timeRange.year}-12-31`);
+    } else {
+      sql = sql.replace(/\{\{start_date\}\}/g, '2024-01-01');
+      sql = sql.replace(/\{\{end_date\}\}/g, '2024-12-31');
+    }
+
+    if (entities.limit) {
+      if (!sql.includes('LIMIT')) {
+        sql += ` LIMIT ${Math.min(entities.limit, 1000)}`;
+      }
+    } else {
+      sql += ' LIMIT 100';
+    }
+
+    return { sql };
   }
   
   /**
@@ -239,10 +403,9 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
       sql += ` WHERE ${whereClauses.join(' AND ')}`;
     }
     
-    // 构建 LIMIT - 使用参数化查询
+    // 构建 LIMIT - MySQL LIMIT 不支持参数化，直接拼接
     const limit = Math.min(entities.limit || 100, 1000);
-    sql += ` LIMIT ?`;
-    params.push(limit);
+    sql += ` LIMIT ${limit}`;
     
     let explanation = `查询 ${metricTable} 表的 ${field} 字段的 ${agg} 值`;
     if (entities.timeRange) {
@@ -542,6 +705,12 @@ export class SQLGeneratorAgent extends LLMAgent<SQLGeneratorInput, SQLGeneratorO
     // 月份
     if (timeRange.expression === 'month' && timeRange.month) {
       return `MONTH(${dateField}) = ${parseInt(timeRange.month)}`;
+    }
+
+    // YEAR_2024 格式
+    const yearMatch = timeRange.value?.match(/^YEAR_(\d{4})$/);
+    if (yearMatch) {
+      return `YEAR(${dateField}) = ${parseInt(yearMatch[1])}`;
     }
 
     // 相对时间

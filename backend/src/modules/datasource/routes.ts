@@ -4,6 +4,7 @@ import { query } from '../../config/database';
 import bcrypt from 'bcryptjs';
 import { createPool } from 'mysql2/promise';
 import { authMiddleware } from '../../middleware/auth';
+import { encrypt } from '../../utils/crypto';
 
 const router = Router();
 
@@ -35,7 +36,29 @@ router.post('/', async (_req: Request, res: Response) => {
     }
     
     const id = uuidv4();
-    const passwordEnc = password ? await bcrypt.hash(password, 10) : null;
+
+    // 先测试连接
+    if (type === 'mysql' && password) {
+      const testPool = createPool({
+        host,
+        port,
+        user: username,
+        password,
+        database: database_name,
+        waitForConnections: true,
+        connectionLimit: 1,
+      });
+      try {
+        const connection = await testPool.getConnection();
+        await connection.ping();
+        connection.release();
+      } finally {
+        await testPool.end();
+      }
+    }
+
+    // 连接成功，存加密后的密码
+    const passwordEnc = password ? encrypt(password) : null;
 
     await query(
       `INSERT INTO datasources (id, user_id, name, type, host, port, database_name, username, password_encrypted, status)

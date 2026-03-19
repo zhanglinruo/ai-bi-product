@@ -52,6 +52,7 @@ export function initOrchestrator(config: {
  * POST /api/agent/query
  */
 router.post('/query', async (req: Request, res: Response) => {
+  console.log('[Agent API] 收到查询请求:', req.body);
   try {
     const { query, datasourceId } = req.body;
     
