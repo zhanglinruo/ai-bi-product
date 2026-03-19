@@ -101,7 +101,7 @@ export class AgentOrchestrator {
   /**
    * 执行完整查询流程
    */
-  async execute(query: string, context: AgentContext): Promise<QueryResult> {
+  async execute(query: string, context: AgentContext, datasourceId?: string): Promise<QueryResult> {
     const startTime = Date.now();
     const result: QueryResult = { success: true };
     const errors: AgentError[] = [];
@@ -117,6 +117,9 @@ export class AgentOrchestrator {
     if (this.config.debug) {
       console.log(`[Orchestrator] 会话ID: ${sessionId}`);
       console.log(`[Orchestrator] 是否追问: ${isFollowUp}`);
+      if (datasourceId) {
+        console.log(`[Orchestrator] 数据源: ${datasourceId}`);
+      }
     }
     
     try {
@@ -126,7 +129,11 @@ export class AgentOrchestrator {
       
       // 1.1 NLU Agent
       if (this.config.debug) console.log('[Orchestrator] 执行 NLU Agent...');
-      const nluResult = await this.executeAgent<NLUOutput>('nlu-agent', { query, context }, context);
+      const nluResult = await this.executeAgent<NLUOutput>('nlu-agent', { 
+        query, 
+        datasourceId,
+        context 
+      }, context);
       
       if (!nluResult.success) {
         errors.push(nluResult.error!);

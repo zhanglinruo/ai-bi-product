@@ -76,8 +76,8 @@ router.post('/query', async (req: Request, res: Response) => {
       permissions: (req as any).user?.permissions || ['query'],
     };
     
-    // 执行查询
-    const result = await orchestrator.execute(query, context);
+    // 执行查询（传递数据源 ID）
+    const result = await orchestrator.execute(query, context, datasourceId);
     
     // 返回结果
     res.json({

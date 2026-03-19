@@ -3,6 +3,7 @@
  * 
  * 整合 NLU + Semantic 功能
  * 使用向量搜索 + 规则匹配 + LLM 降级
+ * 支持数据源动态索引
  */
 
 import { LLMAgent, LLMClient } from '../base';
@@ -14,9 +15,11 @@ import {
 } from '../types';
 import { getLocalEmbeddingService, LocalEmbeddingService } from '../../services/local-embedding';
 import { getSemanticMappingService, SemanticMetric, SemanticDimension, SemanticTerm } from '../../services/semantic-mapping';
+import { getDatasourceVectorService, DatasourceVectorService } from '../../services/datasource-vector';
 
 export interface UnifiedNLUInput {
   query: string;
+  datasourceId?: string;  // 数据源 ID（可选）
   entities?: any;  // 如果有，说明是 Semantic 阶段
   context?: {
     userId?: string;
@@ -100,6 +103,7 @@ export class UnifiedSemanticAgent extends LLMAgent<UnifiedNLUInput, NLUOutput> {
 
   private embeddingService: LocalEmbeddingService;
   private semanticMappingService: ReturnType<typeof getSemanticMappingService>;
+  private datasourceVectorService: DatasourceVectorService;
   private configCache: {
     metrics: SemanticMetric[];
     dimensions: SemanticDimension[];
@@ -115,12 +119,72 @@ export class UnifiedSemanticAgent extends LLMAgent<UnifiedNLUInput, NLUOutput> {
     });
     this.embeddingService = getLocalEmbeddingService();
     this.semanticMappingService = getSemanticMappingService();
+    this.datasourceVectorService = getDatasourceVectorService();
   }
 
   protected async run(input: UnifiedNLUInput, context: AgentContext): Promise<NLUOutput> {
     const query = input.query;
+    const datasourceId = input.datasourceId;
+    
     console.log('[UnifiedSemantic] 处理查询:', query);
+    if (datasourceId) {
+      console.log('[UnifiedSemantic] 数据源:', datasourceId);
+    }
 
+    // 1. 如果有数据源 ID，优先使用数据源向量索引
+    if (datasourceId) {
+      return await this.runWithDatasource(query, datasourceId);
+    }
+
+    // 2. 否则使用全局语义配置
+    return await this.runWithGlobalConfig(query);
+  }
+
+  /**
+   * 使用数据源特定的向量索引
+   */
+  private async runWithDatasource(query: string, datasourceId: string): Promise<NLUOutput> {
+    // 从数据源向量索引搜索
+    const searchResult = await this.datasourceVectorService.searchDatasource(datasourceId, query, 3, 0.5);
+
+    // 构建实体
+    const entities: ExtractedEntities = {
+      metrics: searchResult.metrics.map(m => ({
+        field: m.field,
+        table: m.table,
+        aggregation: m.aggregation,
+        confidence: m.score,
+      })),
+      dimensions: searchResult.dimensions.map(d => ({
+        field: d.field,
+        table: d.table,
+        confidence: d.score,
+      })),
+      filters: {},
+      groupBy: [],
+      limit: 100,
+      intent: 'query',
+    };
+
+    // 补充规则匹配
+    const ruleResult = this.extractByRules(query);
+    let mergedEntities = this.mergeResults(entities, ruleResult);
+
+    // 判断是否需要 LLM 增强
+    const needsLLM = this.needsLLMEnhancement(mergedEntities, query);
+    if (needsLLM) {
+      console.log('[UnifiedSemantic] 调用 LLM 增强...');
+      const llmResult = await this.extractByLLM(query);
+      mergedEntities = this.mergeResults(mergedEntities, llmResult);
+    }
+
+    return this.buildOutput(mergedEntities, needsLLM);
+  }
+
+  /**
+   * 使用全局语义配置
+   */
+  private async runWithGlobalConfig(query: string): Promise<NLUOutput> {
     // 1. 加载最新语义配置
     await this.loadConfig();
 
@@ -147,8 +211,14 @@ export class UnifiedSemanticAgent extends LLMAgent<UnifiedNLUInput, NLUOutput> {
       entities = this.mergeResults(entities, llmResult);
     }
 
-    // 7. 构建最终输出
-    const intent = this.detectIntent(query) as 'query' | 'comparison' | 'trend' | 'analysis' | 'unknown';
+    return this.buildOutput(entities, needsLLM);
+  }
+
+  /**
+   * 构建输出
+   */
+  private buildOutput(entities: ExtractedEntities, needsLLM: boolean): NLUOutput {
+    const intent = this.detectIntent(entities as any) as 'query' | 'comparison' | 'trend' | 'analysis' | 'unknown';
     
     // 处理 groupBy：如果有 __use_dimensions__ 标记，用实际维度替换
     let finalGroupBy = [...entities.groupBy];
@@ -162,7 +232,6 @@ export class UnifiedSemanticAgent extends LLMAgent<UnifiedNLUInput, NLUOutput> {
     }
     
     // 返回完整的实体信息（包含表名、聚合方式等）
-    // 注意：这里返回的对象数组格式，与 ExtractedEntities 类型不同
     const finalEntities: any = {
       metrics: entities.metrics.map((m: any) => ({
         field: m.field,
